@@ -11,6 +11,16 @@ const publicRoutes = require('./routes/public');
 const statsRoutes = require('./routes/stats');
 const webhookRoutes = require('./routes/webhooks');
 const settingsRoutes = require('./routes/settings');
+const corsOptions = {
+  origin: [
+    'http://localhost:5173', 
+    'http://localhost:5174', // Cover all common local ports
+    'https://regulus-frontend.vercel.app' // Replace with your ACTUAL Vercel URL
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
 
 const app = express();
 
