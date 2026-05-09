@@ -1,6 +1,53 @@
 const crypto = require('crypto');
 const router = require('express').Router();
 const supabaseAdmin = require('../config/supabase');
+const { requireAuth } = require('../middleware/auth');
+
+// CRITICAL FIX: Guard all routes below this line to ensure req.user exists
+router.use(requireAuth);
+
+// GET USER'S ACTIVE ORGANIZATION (Used on Login to set Context)
+router.get('/me', async (req, res) => {
+  try {
+    const { data: membership, error: memErr } = await supabaseAdmin
+      .from('org_memberships')
+      .select('org_id, role')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (memErr || !membership) {
+      return res.status(404).json({ error: 'No workspace found.' });
+    }
+
+    const { data: org, error: orgErr } = await supabaseAdmin
+      .from('organizations')
+      .select('*')
+      .eq('id', membership.org_id)
+      .single();
+
+    if (orgErr) throw orgErr;
+
+    res.status(200).json({ ...org, role: membership.role });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch workspace context.' });
+  }
+});
+
+// GET SPECIFIC ORGANIZATION (Used by Layout and Settings for Branding)
+router.get('/:orgId', async (req, res) => {
+  try {
+    const { data: org, error } = await supabaseAdmin
+      .from('organizations')
+      .select('*')
+      .eq('id', req.params.orgId)
+      .single();
+
+    if (error) throw error;
+    res.status(200).json(org);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch organization details.' });
+  }
+});
 
 // CREATE ORGANIZATION
 router.post('/', async (req, res) => {
@@ -116,7 +163,7 @@ router.post('/accept-invite', async (req, res) => {
     if (membershipErr) {
       // If it's a unique constraint error, they are already in the org
       if (membershipErr.code === '23505') {
-         return res.status(400).json({ error: 'You are already a member of this organization.' });
+         return res.status(400).json({ error: 'You are already a member of this workspace.' });
       }
       throw membershipErr;
     }
@@ -127,9 +174,17 @@ router.post('/accept-invite', async (req, res) => {
       .delete()
       .eq('id', invite.id);
 
+    // 4. Get the Org name to send back to the frontend
+    const { data: org } = await supabaseAdmin
+      .from('organizations')
+      .select('name')
+      .eq('id', invite.org_id)
+      .single();
+
     res.status(200).json({ 
       message: 'Successfully joined the organization', 
-      org_id: invite.org_id 
+      org_id: invite.org_id,
+      org_name: org.name
     });
 
   } catch (err) {
