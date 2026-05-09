@@ -12,6 +12,7 @@ const publicRoutes = require('./routes/public');
 const statsRoutes = require('./routes/stats');
 const webhookRoutes = require('./routes/webhooks');
 const settingsRoutes = require('./routes/settings');
+const orgRoutes = require('./routes/orgs');
 const corsOptions = {
   origin: [
     'http://localhost:5173', 
@@ -41,6 +42,7 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/invoices', invoiceRoutes);
+app.use('/api/orgs', orgRoutes);
 app.use('/api/proposals', proposalRoutes);
 app.use('/api/public', publicRoutes); // Public route must be before the 404 handler
 app.use('/api/settings', settingsRoutes);
