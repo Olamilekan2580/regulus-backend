@@ -38,4 +38,23 @@ const requireAuth = async (req, res, next) => {
   }
 };
 
+const requireOrgMember = async (req, res, next) => {
+  const orgId = req.headers['x-org-id']; // Frontend must send this header
+  if (!orgId) return res.status(400).json({ error: 'Organization context missing' });
+
+  const { data: membership, error } = await supabaseAdmin
+    .from('org_memberships')
+    .select('role')
+    .eq('org_id', orgId)
+    .eq('user_id', req.user.id)
+    .single();
+
+  if (error || !membership) {
+    return res.status(403).json({ error: 'Not a member of this organization' });
+  }
+
+  req.orgRole = membership.role; // Useful for RBAC (Role Based Access Control)
+  next();
+};
+
 module.exports = { requireAuth };

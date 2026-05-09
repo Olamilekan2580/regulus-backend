@@ -25,27 +25,36 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 2. CREATE NEW INVOICE
+const { getExchangeRate } = require('../services/currencyService');
+
 router.post('/', async (req, res) => {
   try {
-    const { client_id, invoice_number, total, status, due_date } = req.body;
-
-    // Basic Architecture Validation
-    if (!client_id || total === undefined) {
-      return res.status(400).json({ error: 'Client ID and Total Amount are required.' });
-    }
+    const { client_id, invoice_number, total, status, due_date, currency } = req.body;
+    
+    // Fetch the rate to your base currency (e.g., USD)
+    const rate = await getExchangeRate(currency || 'USD', 'USD');
+    const baseTotal = parseFloat(total) * rate;
 
     const { data, error } = await supabaseAdmin
       .from('invoices')
-      .insert([{ freelancer_id: req.user.id, client_id, invoice_number, total, status, due_date }])
-      .select('*, clients(*)') // Return the joined data instantly for the frontend UI
+      .insert([{ 
+        freelancer_id: req.user.id, 
+        client_id, 
+        invoice_number, 
+        total, 
+        currency: currency || 'USD',
+        base_currency_total: baseTotal,
+        exchange_rate_at_creation: rate,
+        status, 
+        due_date 
+      }])
+      .select('*, clients(*)')
       .single();
 
     if (error) throw error;
     res.status(201).json(data);
   } catch (err) {
-    console.error('[Invoices POST Error]:', err.message);
-    res.status(500).json({ error: 'Failed to create invoice' });
+    res.status(500).json({ error: 'Failed to create invoice with FX data' });
   }
 });
 
@@ -91,5 +100,54 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete invoice' });
   }
 });
+
+// backend/src/routes/invoices.js
+router.put('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const { data: invoice, error } = await supabaseAdmin
+      .from('invoices')
+      .update(updates)
+      .eq('id', id)
+      .eq('freelancer_id', req.user.id)
+      .select('*, clients(*)')
+      .single();
+
+    if (error) throw error;
+
+    // ARCHITECT MOVE: Trigger Automation only when status changes to 'Paid'
+    if (updates.status === 'Paid') {
+      triggerOnboardingWorkflow(invoice);
+    }
+
+    res.status(200).json(invoice);
+  } catch (err) {
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// Logic to ping n8n or an internal worker
+async function triggerOnboardingWorkflow(invoice) {
+  const WEBHOOK_URL = process.env.N8N_ONBOARDING_WEBHOOK;
+  if (!WEBHOOK_URL) return;
+
+  try {
+    await fetch(WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'invoice.paid',
+        client_name: invoice.clients?.name,
+        client_email: invoice.clients?.email,
+        amount: invoice.total,
+        project_id: invoice.project_id // If applicable
+      })
+    });
+  } catch (err) {
+    console.error('Automation Trigger Failed:', err.message);
+  }
+}
 
 module.exports = router;

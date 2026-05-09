@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+const healthRoutes = require('./src/routes/health');
 const clientRoutes = require('./routes/clients');
 const authRoutes = require('./routes/auth')
 const projectRoutes = require('./routes/projects');
@@ -43,6 +44,7 @@ app.use('/api/invoices', invoiceRoutes);
 app.use('/api/proposals', proposalRoutes);
 app.use('/api/public', publicRoutes); // Public route must be before the 404 handler
 app.use('/api/settings', settingsRoutes);
+app.use('/api/health', healthRoutes);
 
 // Global 404 Handler - MUST BE LAST
 app.use((req, res) => {
