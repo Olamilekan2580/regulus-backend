@@ -6,13 +6,17 @@ const supabaseAdmin = require('../config/supabase');
 // Apply the bouncer
 router.use(requireAuth);
 
-// GET: Fetch all clients for the logged-in freelancer
+// GET: Fetch all clients for the specific Organization
 router.get('/', async (req, res) => {
+  const orgId = req.headers['x-org-id'];
+
+  if (!orgId) return res.status(400).json({ error: 'Organization context missing.' });
+
   try {
     const { data, error } = await supabaseAdmin
       .from('clients')
       .select('*')
-      .eq('freelancer_id', req.user.id)
+      .eq('org_id', orgId) // Filter by Organization, not User ID
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -23,11 +27,13 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST: Create a new client
+// POST: Create a new client within the Organization
 router.post('/', async (req, res) => {
   try {
     const { name, email, phone, company } = req.body;
-    
+    const orgId = req.headers['x-org-id'];
+
+    if (!orgId) return res.status(400).json({ error: 'Organization context missing.' });
     if (!name || !email) {
       return res.status(400).json({ error: 'Name and email are required' });
     }
@@ -35,7 +41,7 @@ router.post('/', async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from('clients')
       .insert([{ 
-        freelancer_id: req.user.id, 
+        org_id: orgId, // Tied to the workspace
         name, 
         email, 
         phone, 
@@ -48,9 +54,8 @@ router.post('/', async (req, res) => {
     res.status(201).json(data);
   } catch (err) {
     console.error('[Clients POST Error]:', err.message);
-    // 23505 is the PostgreSQL error code for unique violation
     if (err.code === '23505') {
-      return res.status(409).json({ error: 'A client with this email already exists' });
+      return res.status(409).json({ error: 'A client with this email already exists in this workspace' });
     }
     res.status(500).json({ error: 'Failed to create client' });
   }

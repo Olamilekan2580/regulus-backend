@@ -345,4 +345,19 @@ router.put('/:orgId/complete-onboarding', async (req, res) => {
   }
 });
 
+// FINALIZING ONBOARDING (The Loop Breaker)
+router.put('/:orgId/complete-onboarding', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin
+      .from('organizations')
+      .update({ onboarding_completed: true })
+      .eq('id', req.params.orgId);
+
+    if (error) throw error;
+    res.status(200).json({ message: 'Onboarding finalized.' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to finalize onboarding.' });
+  }
+});
+
 module.exports = router;
