@@ -49,6 +49,131 @@ router.get('/:orgId', async (req, res) => {
   }
 });
 
+// UPDATE PAYMENT GATEWAY SETTINGS
+router.put('/:orgId/payments', async (req, res) => {
+  const { provider, stripe_pk, stripe_sk, paystack_pk, paystack_sk } = req.body;
+  const { orgId } = req.params;
+
+  try {
+    // Security Check: Only Admins/Owners
+    const { data: membership } = await supabaseAdmin
+      .from('org_memberships')
+      .select('role')
+      .eq('org_id', orgId)
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (!membership || membership.role === 'member') {
+      return res.status(403).json({ error: 'Only Admins can configure payments.' });
+    }
+
+    // Update the payment_settings JSONB column
+    const { data: org, error } = await supabaseAdmin
+      .from('organizations')
+      .update({ 
+        payment_settings: { 
+          provider, 
+          stripe_pk, 
+          stripe_sk, 
+          paystack_pk, 
+          paystack_sk 
+        } 
+      })
+      .eq('id', orgId)
+      .select('payment_settings')
+      .single();
+
+    if (error) throw error;
+
+    res.status(200).json(org.payment_settings);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update payment settings.' });
+  }
+});
+
+// --- NEW: GET ALL MEMBERS FOR A WORKSPACE ---
+router.get('/:orgId/members', async (req, res) => {
+  try {
+    // 1. Verify requester has access to this org
+    const { data: requesterMem, error: reqErr } = await supabaseAdmin
+      .from('org_memberships')
+      .select('role')
+      .eq('org_id', req.params.orgId)
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (reqErr || !requesterMem) return res.status(403).json({ error: 'Access denied.' });
+
+    // 2. Fetch all memberships for the org
+    const { data: memberships, error: memErr } = await supabaseAdmin
+      .from('org_memberships')
+      .select('user_id, role, created_at')
+      .eq('org_id', req.params.orgId);
+
+    if (memErr) throw memErr;
+
+    // 3. To get emails, we need to query Auth Admin (in a real app, you might have a public profiles table)
+    const { data: { users }, error: authErr } = await supabaseAdmin.auth.admin.listUsers();
+    
+    if (authErr) throw authErr;
+
+    const formattedMembers = memberships.map(m => {
+      const user = users.find(u => u.id === m.user_id);
+      return { 
+        user_id: m.user_id, 
+        role: m.role, 
+        joined: m.created_at, 
+        email: user ? user.email : 'Unknown User' 
+      };
+    });
+
+    res.status(200).json(formattedMembers);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch team members.' });
+  }
+});
+
+// --- NEW: REMOVE A TEAM MEMBER ---
+router.delete('/:orgId/members/:userId', async (req, res) => {
+  try {
+    // 1. Check requester role (Must be Admin or Owner)
+    const { data: requester } = await supabaseAdmin
+      .from('org_memberships')
+      .select('role')
+      .eq('org_id', req.params.orgId)
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (!requester || requester.role === 'member') {
+      return res.status(403).json({ error: 'Access denied. Only Admins can remove members.' });
+    }
+
+    // 2. Prevent deleting the Owner
+    const { data: target } = await supabaseAdmin
+      .from('org_memberships')
+      .select('role')
+      .eq('org_id', req.params.orgId)
+      .eq('user_id', req.params.userId)
+      .single();
+
+    if (target?.role === 'owner') {
+      return res.status(400).json({ error: 'Cannot remove the workspace owner.' });
+    }
+
+    // 3. Execute Deletion
+    await supabaseAdmin
+      .from('org_memberships')
+      .delete()
+      .eq('org_id', req.params.orgId)
+      .eq('user_id', req.params.userId);
+
+    res.status(200).json({ message: 'Member removed successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to remove member.' });
+  }
+});
+
 // CREATE ORGANIZATION
 router.post('/', async (req, res) => {
   const { name, subdomain } = req.body;
@@ -114,6 +239,18 @@ router.post('/:orgId/invite', async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
 
   try {
+    // SECURITY: Ensure inviter has permission
+    const { data: requester } = await supabaseAdmin
+      .from('org_memberships')
+      .select('role')
+      .eq('org_id', req.params.orgId)
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (!requester || requester.role === 'member') {
+      return res.status(403).json({ error: 'Only Admins can invite new members.' });
+    }
+
     const { error } = await supabaseAdmin
       .from('org_invitations')
       .insert([{ 
@@ -126,8 +263,6 @@ router.post('/:orgId/invite', async (req, res) => {
 
     if (error) throw error;
 
-    // ARCHITECT NOTE: This is where you'd trigger your Email Service
-    // Send link: https://regulus.app/join?token=${token}
     res.status(200).json({ message: 'Invite created', token });
   } catch (err) {
     res.status(500).json({ error: err.message });
