@@ -137,3 +137,5 @@ router.post('/accept-invite', async (req, res) => {
     res.status(500).json({ error: 'Failed to process the invitation' });
   }
 });
+
+module.exports = router;
