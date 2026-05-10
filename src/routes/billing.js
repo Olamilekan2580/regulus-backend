@@ -1,47 +1,57 @@
 const express = require('express');
 const router = express.Router();
 let stripe;
+
 if (process.env.STRIPE_SECRET_KEY) {
   stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 } else {
-  console.warn('⚠️ CRITICAL: STRIPE_SECRET_KEY is missing from environment variables. Payments disabled.');
-  // We initialize with a dummy key so the server boots up, but runtime payments will fail.
+  console.warn('⚠️ CRITICAL: STRIPE_SECRET_KEY is missing. Payments disabled.');
   stripe = require('stripe')('sk_test_dummy'); 
 }
-const supabaseAdmin = require('../config/supabase');
-const { requireAuth } = require('../middleware/auth');
 
-// 1. GENERATE SUBSCRIPTION CHECKOUT
+const supabaseAdmin = require('../config/supabase');
+const authModule = require('../middleware/auth');
+const requireAuth = typeof authModule === 'function' ? authModule : authModule.requireAuth;
+
+// PRICE ID MAPPING
+const PRICE_IDS = {
+  solo: 'price_1TVaPuP9XEZoEW0xMvy21Ep6',
+  agency: 'price_1TVaQGP9XEZoEW0xnMpAp2iC'
+};
+
+// 1. GENERATE DYNAMIC SUBSCRIPTION CHECKOUT
 router.post('/subscribe', requireAuth, async (req, res) => {
   try {
-    const { orgId } = req.body;
+    const { orgId, plan_tier } = req.body;
 
-    // Get the organization
+    if (!PRICE_IDS[plan_tier]) {
+      return res.status(400).json({ error: 'Invalid plan tier selected.' });
+    }
+
     const { data: org } = await supabaseAdmin.from('organizations').select('*').eq('id', orgId).single();
     if (!org) return res.status(404).json({ error: 'Organization not found' });
 
-    // Create a Stripe Checkout Session for your $9.99/mo plan
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'subscription',
       line_items: [{
-        // You MUST create a Product in your Stripe Dashboard for $9.99/mo and paste its Price ID here
-        price: process.env.STRIPE_MONTHLY_PRICE_ID, 
+        price: PRICE_IDS[plan_tier], 
         quantity: 1,
       }],
-      client_reference_id: orgId, // CRITICAL: Tells the webhook which org paid
+      client_reference_id: orgId, 
+      metadata: { plan_tier }, // Pass the tier so the webhook knows what was bought
       success_url: `${req.headers.origin}/settings?billing=success`,
       cancel_url: `${req.headers.origin}/settings?billing=canceled`,
     });
 
     res.status(200).json({ url: session.url });
   } catch (err) {
+    console.error('[Stripe Session Error]:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 2. STRIPE WEBHOOK (How Stripe tells your DB the user actually paid)
-// Note: This route must NOT use express.json() because Stripe needs the raw body
+// 2. STRIPE WEBHOOK (Handles the "Real" DB Updates)
 router.post('/webhook', express.raw({type: 'application/json'}), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
@@ -52,21 +62,23 @@ router.post('/webhook', express.raw({type: 'application/json'}), async (req, res
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Handle the subscription success event
+  // Handle successful payment
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const orgId = session.client_reference_id;
+    const planTier = session.metadata.plan_tier;
 
     if (orgId) {
       await supabaseAdmin.from('organizations').update({
         subscription_status: 'active',
+        plan_tier: planTier, // Properly updates solo vs agency
         stripe_customer_id: session.customer,
         stripe_subscription_id: session.subscription
       }).eq('id', orgId);
     }
   }
 
-  // Handle subscription cancellations
+  // Handle cancellations
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object;
     await supabaseAdmin.from('organizations').update({
