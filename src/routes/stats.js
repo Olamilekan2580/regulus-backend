@@ -1,36 +1,44 @@
 const express = require('express');
 const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
-const requireAuth = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth'); // Cleaned up the import
 
-const authModule = require('../middleware/auth');
-const authMiddleware = typeof authModule === 'function' ? authModule : authModule.requireAuth;
-
-router.use(authMiddleware);
+router.use(requireAuth);
 
 router.get('/', async (req, res) => {
   try {
-    const userId = req.user.id;
+    // 1. Grab the Organization ID from the headers (Injected by your Axios Interceptor)
+    const orgId = req.headers['x-org-id'];
 
+    if (!orgId) {
+      return res.status(400).json({ error: 'Organization context missing from request headers.' });
+    }
+
+    // 2. Fetch all data scoped to the ORGANIZATION, not the user
     const [clients, projects, invoices] = await Promise.all([
-      supabaseAdmin.from('clients').select('id', { count: 'exact' }).eq('freelancer_id', userId),
-      supabaseAdmin.from('projects').select('id', { count: 'exact' }).eq('freelancer_id', userId),
-      supabaseAdmin.from('invoices').select('total, status').eq('freelancer_id', userId)
+      supabaseAdmin.from('clients').select('id', { count: 'exact' }).eq('org_id', orgId),
+      supabaseAdmin.from('projects').select('id', { count: 'exact' }).eq('org_id', orgId),
+      supabaseAdmin.from('invoices').select('total, status').eq('org_id', orgId)
     ]);
 
-    const totalRevenue = invoices.data
+    // Handle potential nulls safely
+    const invoiceList = invoices.data || [];
+
+    const totalRevenue = invoiceList
       .filter(inv => inv.status === 'Paid')
-      .reduce((sum, inv) => sum + parseFloat(inv.total), 0);
+      .reduce((sum, inv) => sum + parseFloat(inv.total || 0), 0);
 
-    const outstanding = invoices.data
+    const outstanding = invoiceList
       .filter(inv => inv.status !== 'Paid')
-      .reduce((sum, inv) => sum + parseFloat(inv.total), 0);
+      .reduce((sum, inv) => sum + parseFloat(inv.total || 0), 0);
 
+    // 3. Return the exact structure your Dashboard.jsx expects
     res.status(200).json({
       clientCount: clients.count || 0,
       projectCount: projects.count || 0,
       revenue: totalRevenue.toFixed(2),
-      outstanding: outstanding.toFixed(2)
+      outstanding: outstanding.toFixed(2),
+      chartData: [] // Ready for Phase 2 when we map actual revenue trends
     });
   } catch (err) {
     console.error('[Stats Error]:', err.message);
