@@ -1,6 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const stripe = require('stripe')(process.env.PLATFORM_STRIPE_SECRET_KEY); // YOUR master Stripe key
+let stripe;
+if (process.env.STRIPE_SECRET_KEY) {
+  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+} else {
+  console.warn('⚠️ CRITICAL: STRIPE_SECRET_KEY is missing from environment variables. Payments disabled.');
+  // We initialize with a dummy key so the server boots up, but runtime payments will fail.
+  stripe = require('stripe')('sk_test_dummy'); 
+}
 const supabaseAdmin = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
 

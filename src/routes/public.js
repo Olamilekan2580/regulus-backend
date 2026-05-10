@@ -1,7 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+let stripe;
+if (process.env.STRIPE_SECRET_KEY) {
+  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+} else {
+  console.warn('⚠️ CRITICAL: STRIPE_SECRET_KEY is missing from environment variables. Payments disabled.');
+  // We initialize with a dummy key so the server boots up, but runtime payments will fail.
+  stripe = require('stripe')('sk_test_dummy'); 
+}
 const axios = require('axios'); // Needed to verify Paystack transactions
 const crypto = require('crypto'); // Needed for the Vault
 
