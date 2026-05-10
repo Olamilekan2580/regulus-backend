@@ -11,22 +11,27 @@ router.use(requireAuth);
 // TRIGGER IaC PROVISIONING
 // ==========================================
 router.post('/provision', async (req, res) => {
-  const orgId = req.headers['x-org-id'];
-  if (!orgId) return res.status(400).json({ error: 'Organization context missing' });
+  // ROBUST CONTEXT: Check headers OR the request body
+  const orgId = req.headers['x-org-id'] || req.body.org_id;
+  
+  if (!orgId) {
+    return res.status(400).json({ error: 'Organization context missing. Please refresh.' });
+  }
 
   try {
     const { project_id, stack_template, repo_name, env_variables } = req.body;
 
-    // 1. Verify the project exists and is approved/paid
+    // 1. Verify the project exists AND belongs to this exact organization
     const { data: project, error: projectErr } = await supabaseAdmin
       .from('projects')
       .select('*, clients(name, email)')
       .eq('id', project_id)
-      .eq('org_id', orgId)
+      .eq('org_id', orgId) // <-- If this is NULL in Supabase, this query fails
       .single();
 
     if (projectErr || !project) {
-      return res.status(404).json({ error: 'Project not found or access denied.' });
+      console.error(`[IaC Auth Block]: Project ${project_id} not found for Org ${orgId}`);
+      return res.status(404).json({ error: 'Project not found or access denied. Ensure it is linked to your workspace.' });
     }
 
     // 2. Build the Provisioning Payload
@@ -42,7 +47,7 @@ router.post('/provision', async (req, res) => {
         name: project.name,
       },
       deployment: {
-        template: stack_template, // e.g., "nextjs-supabase-saas" or "fastapi-docker"
+        template: stack_template, 
         repo_name: repo_name.toLowerCase().replace(/\s+/g, '-'),
         environment: 'production',
         injected_secrets: env_variables || []
@@ -50,7 +55,7 @@ router.post('/provision', async (req, res) => {
       timestamp: new Date().toISOString()
     };
 
-    // 3. Fire the payload to your automation layer (n8n, GitHub Actions, or Vercel API)
+    // 3. Fire the payload to your automation layer
     const WEBHOOK_URL = process.env.N8N_PROVISIONING_WEBHOOK;
     
     if (WEBHOOK_URL) {
@@ -63,7 +68,7 @@ router.post('/provision', async (req, res) => {
       console.warn('⚠️ N8N_PROVISIONING_WEBHOOK is not set. Simulating successful dispatch.');
     }
 
-    // 4. Update project status to indicate infrastructure is spinning up
+    // 4. Update project status
     await supabaseAdmin
       .from('projects')
       .update({ status: 'Provisioning Infrastructure' })
@@ -71,7 +76,7 @@ router.post('/provision', async (req, res) => {
 
     res.status(200).json({ 
       message: 'Infrastructure provisioning dispatched successfully.',
-      pipeline_id: `pipe_${Date.now()}` // Mock ID for frontend tracking
+      pipeline_id: `pipe_${Date.now()}`
     });
 
   } catch (err) {
