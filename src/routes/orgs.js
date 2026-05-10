@@ -37,7 +37,7 @@ router.get('/me', async (req, res) => {
 
 // ==========================================
 // 2. CREATION & ONBOARDING (The Entry Point)
-// ==========================================
+// POST /api/orgs - CREATE a new workspace and link it
 router.post('/', async (req, res) => {
   const { name, subdomain } = req.body;
   if (!name) return res.status(400).json({ error: 'Workspace name is required.' });
@@ -50,7 +50,8 @@ router.post('/', async (req, res) => {
         owner_id: req.user.id, 
         name, 
         subdomain: subdomain || null,
-        onboarding_completed: false,
+        // CHANGE THIS LINE FROM false TO true
+        onboarding_completed: true, 
         brand_settings: { primary: '#141929', accent: '#08F7BB' }
       }])
       .select().single();
