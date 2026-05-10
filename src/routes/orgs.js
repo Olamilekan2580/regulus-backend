@@ -295,4 +295,28 @@ router.post('/accept-invite', async (req, res) => {
   }
 });
 
+// ==========================================
+// UPGRADE WORKSPACE PLAN (DEV MODE)
+// ==========================================
+router.put('/:id/plan', async (req, res) => {
+  const orgId = req.params.id;
+  const { plan_tier, subscription_status } = req.body;
+
+  try {
+    const { error } = await supabaseAdmin
+      .from('organizations')
+      .update({ 
+        plan_tier: plan_tier, 
+        subscription_status: subscription_status 
+      })
+      .eq('id', orgId);
+
+    if (error) throw error;
+    res.status(200).json({ message: 'Plan upgraded successfully.' });
+  } catch (err) {
+    console.error('[Plan Upgrade Error]:', err.message);
+    res.status(500).json({ error: 'Failed to upgrade workspace plan.' });
+  }
+});
+
 module.exports = router;
