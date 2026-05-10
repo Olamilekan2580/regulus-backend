@@ -60,7 +60,9 @@ app.use('/api/clients', billingGuard, clientRoutes);
 app.use('/api/projects', billingGuard, projectRoutes);
 app.use('/api/invoices', billingGuard, invoiceRoutes);
 app.use('/api/proposals', billingGuard, proposalRoutes);
-
+app.use('/api/vault', require('./routes/vault'));
+app.use('/api/contracts', require('./routes/contracts'));
+app.use('/api/infrastructure', require('./routes/infrastructure'));
 // Global 404 Handler - MUST BE LAST
 app.use((req, res) => {
   console.log(`[404] Resource not found: ${req.url}`);
