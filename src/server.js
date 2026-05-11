@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 // 1. ROUTE IMPORTS 
@@ -15,8 +17,8 @@ const webhookRoutes = require('./routes/webhooks');
 const settingsRoutes = require('./routes/settings');
 const orgRoutes = require('./routes/orgs');
 const billingRoutes = require('./routes/billing');
-const updatesRoutes = require('./routes/updates'); // FIX 1: Import updates
-const portalRoutes = require('./routes/portal');   // FIX 2: Import portal
+const updatesRoutes = require('./routes/updates'); 
+const portalRoutes = require('./routes/portal');   
 
 // Premium Feature Imports
 const vaultRoutes = require('./routes/vault');
@@ -24,21 +26,38 @@ const contractRoutes = require('./routes/contracts');
 const infrastructureRoutes = require('./routes/infrastructure');
 
 // Middleware
-const { requireAuth } = require('./middleware/auth'); // Import requireAuth
+const { requireAuth } = require('./middleware/auth'); 
 const { billingGuard } = require('./middleware/billingGuard');
 
 const corsOptions = {
   origin: [
     'http://localhost:5173', 
     'http://localhost:5174',
-    'https://regulus-frontend.vercel.app' 
-  ],
+    'https://regulus-frontend.vercel.app',
+    process.env.FRONTEND_URL
+  ].filter(Boolean),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-org-id']
 };
 
 const app = express();
+
+// ==========================================
+// 1.5 SECURITY MIDDLEWARES
+// ==========================================
+app.use(helmet()); // Secures HTTP headers
+
+// Global Rate Limiter to prevent brute-force/DDoS
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // Limit each IP to 1000 requests per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests from this IP, please try again after 15 minutes.' }
+});
+app.use(globalLimiter);
+
 app.use(cors(corsOptions));
 
 // ==========================================
@@ -58,7 +77,7 @@ app.use((req, res, next) => {
 // ==========================================
 app.use('/api/auth', authRoutes);
 app.use('/api/public', publicRoutes);
-app.use('/api/portal', portalRoutes); // FIX 2: Mount portal
+app.use('/api/portal', portalRoutes); 
 app.use('/api/webhooks', webhookRoutes); 
 
 // Infrastructure Routes
@@ -70,13 +89,12 @@ app.use('/api/billing', billingRoutes);
 // ==========================================
 // 4. THE GATEKEEPER: PROTECTED SAAS ROUTES
 // ==========================================
-// FIX 3: Apply requireAuth BEFORE billingGuard
 app.use('/api/stats', requireAuth, billingGuard, statsRoutes);
 app.use('/api/clients', requireAuth, billingGuard, clientRoutes);
 app.use('/api/projects', requireAuth, billingGuard, projectRoutes);
 app.use('/api/invoices', requireAuth, billingGuard, invoiceRoutes);
 app.use('/api/proposals', requireAuth, billingGuard, proposalRoutes);
-app.use('/api/updates', requireAuth, billingGuard, updatesRoutes); // FIX 1: Mount updates
+app.use('/api/updates', requireAuth, billingGuard, updatesRoutes); 
 
 // Regulus Enterprise Features (LOCKED DOWN)
 app.use('/api/vault', requireAuth, billingGuard, vaultRoutes);

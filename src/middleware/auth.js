@@ -57,4 +57,5 @@ const requireOrgMember = async (req, res, next) => {
   next();
 };
 
-module.exports = { requireAuth };
+// 🔒 THE FIX: Export both middlewares so routes do not crash on import
+module.exports = { requireAuth, requireOrgMember };
