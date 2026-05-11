@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-// 1. ROUTE IMPORTS (Cleanly structured)
+// 1. ROUTE IMPORTS 
 const healthRoutes = require('./routes/health');
 const clientRoutes = require('./routes/clients');
 const authRoutes = require('./routes/auth');
@@ -15,6 +15,8 @@ const webhookRoutes = require('./routes/webhooks');
 const settingsRoutes = require('./routes/settings');
 const orgRoutes = require('./routes/orgs');
 const billingRoutes = require('./routes/billing');
+const updatesRoutes = require('./routes/updates'); // FIX 1: Import updates
+const portalRoutes = require('./routes/portal');   // FIX 2: Import portal
 
 // Premium Feature Imports
 const vaultRoutes = require('./routes/vault');
@@ -22,6 +24,7 @@ const contractRoutes = require('./routes/contracts');
 const infrastructureRoutes = require('./routes/infrastructure');
 
 // Middleware
+const { requireAuth } = require('./middleware/auth'); // Import requireAuth
 const { billingGuard } = require('./middleware/billingGuard');
 
 const corsOptions = {
@@ -41,8 +44,6 @@ app.use(cors(corsOptions));
 // ==========================================
 // 2. PARSER PIPELINE (CRITICAL STRIPE FIX)
 // ==========================================
-// Because express.raw is placed here, req.body becomes a Buffer for the webhook, 
-// causing express.json() to safely skip it on the next line.
 app.use('/api/billing/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
@@ -57,9 +58,10 @@ app.use((req, res, next) => {
 // ==========================================
 app.use('/api/auth', authRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/portal', portalRoutes); // FIX 2: Mount portal
 app.use('/api/webhooks', webhookRoutes); 
 
-// Infrastructure Routes (Unlocked so they can manage settings/billing)
+// Infrastructure Routes
 app.use('/api/orgs', orgRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/health', healthRoutes);
@@ -68,17 +70,18 @@ app.use('/api/billing', billingRoutes);
 // ==========================================
 // 4. THE GATEKEEPER: PROTECTED SAAS ROUTES
 // ==========================================
-// Core Operations
-app.use('/api/stats', billingGuard, statsRoutes);
-app.use('/api/clients', billingGuard, clientRoutes);
-app.use('/api/projects', billingGuard, projectRoutes);
-app.use('/api/invoices', billingGuard, invoiceRoutes);
-app.use('/api/proposals', billingGuard, proposalRoutes);
+// FIX 3: Apply requireAuth BEFORE billingGuard
+app.use('/api/stats', requireAuth, billingGuard, statsRoutes);
+app.use('/api/clients', requireAuth, billingGuard, clientRoutes);
+app.use('/api/projects', requireAuth, billingGuard, projectRoutes);
+app.use('/api/invoices', requireAuth, billingGuard, invoiceRoutes);
+app.use('/api/proposals', requireAuth, billingGuard, proposalRoutes);
+app.use('/api/updates', requireAuth, billingGuard, updatesRoutes); // FIX 1: Mount updates
 
 // Regulus Enterprise Features (LOCKED DOWN)
-app.use('/api/vault', billingGuard, vaultRoutes);
-app.use('/api/contracts', billingGuard, contractRoutes);
-app.use('/api/infrastructure', billingGuard, infrastructureRoutes);
+app.use('/api/vault', requireAuth, billingGuard, vaultRoutes);
+app.use('/api/contracts', requireAuth, billingGuard, contractRoutes);
+app.use('/api/infrastructure', requireAuth, billingGuard, infrastructureRoutes);
 
 // ==========================================
 // 5. GLOBAL 404 HANDLER
