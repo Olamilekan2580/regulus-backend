@@ -4,7 +4,8 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
-// 1. ROUTE IMPORTS 
+// 1. ROUTE IMPORTS
+const usersRoutes = require('./routes/users'); 
 const healthRoutes = require('./routes/health');
 const clientRoutes = require('./routes/clients');
 const authRoutes = require('./routes/auth');
@@ -76,6 +77,7 @@ app.use((req, res, next) => {
 // 3. UNGATED ROUTES (Public, Auth, Core Settings)
 // ==========================================
 app.use('/api/auth', authRoutes);
+app.use('/api/users', requireAuth, usersRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/portal', portalRoutes); 
 app.use('/api/webhooks', webhookRoutes); 
