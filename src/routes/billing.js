@@ -22,13 +22,15 @@ const PRICE_IDS = {
 // 1. GENERATE DYNAMIC SUBSCRIPTION CHECKOUT
 router.post('/subscribe', requireAuth, async (req, res) => {
   try {
-    const { orgId, plan_tier } = req.body;
+    // 🔒 THE FIX: Match the frontend payload's snake_case property
+    const { org_id, plan_tier } = req.body;
 
     if (!PRICE_IDS[plan_tier]) {
       return res.status(400).json({ error: 'Invalid plan tier selected.' });
     }
 
-    const { data: org } = await supabaseAdmin.from('organizations').select('*').eq('id', orgId).single();
+    // 🔒 THE FIX: Query the DB with the correct org_id
+    const { data: org } = await supabaseAdmin.from('organizations').select('*').eq('id', org_id).single();
     if (!org) return res.status(404).json({ error: 'Organization not found' });
 
     const session = await stripe.checkout.sessions.create({
@@ -38,7 +40,7 @@ router.post('/subscribe', requireAuth, async (req, res) => {
         price: PRICE_IDS[plan_tier], 
         quantity: 1,
       }],
-      client_reference_id: orgId, 
+      client_reference_id: org_id, // 🔒 THE FIX: Attach correct org_id for the webhook
       metadata: { plan_tier }, // Pass the tier so the webhook knows what was bought
       success_url: `${req.headers.origin}/settings?billing=success`,
       cancel_url: `${req.headers.origin}/settings?billing=canceled`,
