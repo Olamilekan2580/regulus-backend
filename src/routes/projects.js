@@ -281,4 +281,46 @@ router.get('/:id/submissions', requireAuth, async (req, res) => {
   }
 });
 
+// ==========================================
+// POST: CLIENT SUBMITS INTAKE (PUBLIC ROUTE)
+// ==========================================
+// Notice: No 'requireAuth' here. Clients don't have JWTs.
+router.post('/:id/submissions', async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const { form_data, files } = req.body;
+
+    // 1. Verify the project actually exists before accepting data
+    const { data: project, error: projErr } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', projectId)
+      .single();
+
+    if (projErr || !project) {
+      return res.status(404).json({ error: 'Project not found or invalid intake link.' });
+    }
+
+    // 2. Insert the client's data into the table we just created
+    const { data, error } = await supabaseAdmin
+      .from('project_submissions')
+      .insert([
+        {
+          project_id: projectId,
+          form_data: form_data || {},
+          files: files || []
+        }
+      ])
+      .select();
+
+    if (error) throw error;
+    
+    res.status(201).json({ message: 'Submission received successfully', data });
+
+  } catch (err) {
+    console.error('[Client Intake Save Error]:', err.message);
+    res.status(500).json({ error: 'Failed to save intake data.' });
+  }
+});
+
 module.exports = router;
