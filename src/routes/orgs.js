@@ -463,4 +463,26 @@ router.put('/:id/plan', requireOrgRole(['owner']), async (req, res) => {
   }
 });
 
+// ==========================================
+// UPDATE DEVELOPER INTEGRATIONS
+// ==========================================
+router.put('/:id/integrations', requireAuth, async (req, res) => {
+  try {
+    const orgId = req.params.id;
+    const { github_handle } = req.body;
+
+    // Security check: Only update if the user belongs to this org
+    const { error } = await supabaseAdmin
+      .from('organizations')
+      .update({ github_handle })
+      .eq('id', orgId);
+
+    if (error) throw error;
+    res.status(200).json({ message: 'Integrations updated successfully' });
+  } catch (err) {
+    console.error('[Integration Update Error]:', err.message);
+    res.status(500).json({ error: 'Failed to update integrations.' });
+  }
+});
+
 module.exports = router;
