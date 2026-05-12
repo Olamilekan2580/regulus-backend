@@ -303,4 +303,31 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ==========================================
+// PUSH UPDATE TO CLIENT TIMELINE
+// ==========================================
+router.post('/:id/updates', requireAuth, async (req, res) => {
+  try {
+    const { title, description, files } = req.body;
+    const projectId = req.params.id;
+
+    const { data, error } = await supabaseAdmin
+      .from('project_updates')
+      .insert([{
+        project_id: projectId,
+        title,
+        description,
+        files: files || []
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('[Project Update Error]:', err.message);
+    res.status(500).json({ error: 'Failed to post project update.' });
+  }
+});
+
 module.exports = router;

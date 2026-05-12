@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
 let stripe;
+
 if (process.env.STRIPE_SECRET_KEY) {
   stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 } else {
@@ -9,6 +10,7 @@ if (process.env.STRIPE_SECRET_KEY) {
   // We initialize with a dummy key so the server boots up, but runtime payments will fail.
   stripe = require('stripe')('sk_test_dummy'); 
 }
+
 const axios = require('axios'); // Needed to verify Paystack transactions
 const crypto = require('crypto'); // Needed for the Vault
 
@@ -231,6 +233,87 @@ router.post('/vault/:id/reveal', async (req, res) => {
   } catch (err) {
     console.error('[Vault Reveal Error]:', err.message);
     res.status(500).json({ error: 'Decryption sequence failed.' });
+  }
+});
+
+// ==========================================
+// 6. ASYNC CLIENT INTAKE & UPDATES (NEW)
+// ==========================================
+
+// A. Fetch Intake Form Details via Secure Token
+router.get('/intake/:token', async (req, res) => {
+  try {
+    const { data: project, error } = await supabaseAdmin
+      .from('projects')
+      .select('id, name, description, intake_submitted, clients(name, company)')
+      .eq('intake_token', req.params.token)
+      .single();
+
+    if (error || !project) return res.status(404).json({ error: 'Invalid or expired intake link.' });
+    if (project.intake_submitted) return res.status(400).json({ error: 'Intake form already submitted.' });
+
+    res.json(project);
+  } catch (err) {
+    console.error('[Public Intake GET Error]:', err.message);
+    res.status(500).json({ error: 'Failed to load intake portal.' });
+  }
+});
+
+// B. Submit Intake Form Requirements
+router.post('/intake/:token', async (req, res) => {
+  const { requirements } = req.body; 
+  // Note: Frontend handles actual file upload to Supabase Storage, we just save the text state here
+  
+  try {
+    const { data: project, error: fetchErr } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('intake_token', req.params.token)
+      .single();
+
+    if (fetchErr || !project) return res.status(404).json({ error: 'Invalid link.' });
+
+    const { error: updateErr } = await supabaseAdmin
+      .from('projects')
+      .update({ 
+        client_requirements: requirements,
+        intake_submitted: true, 
+        status: 'Active' // Automatically move project out of Draft
+      })
+      .eq('id', project.id);
+
+    if (updateErr) throw updateErr;
+
+    res.json({ message: 'Project details securely transmitted to your freelancer.' });
+  } catch (err) {
+    console.error('[Public Intake POST Error]:', err.message);
+    res.status(500).json({ error: 'Failed to submit project details.' });
+  }
+});
+
+// C. Fetch Project Timeline/Updates via Secure Token
+router.get('/updates/:token', async (req, res) => {
+  try {
+    const { data: project, error: projErr } = await supabaseAdmin
+      .from('projects')
+      .select('id, name, status, deadline, clients(name, company)')
+      .eq('update_token', req.params.token)
+      .single();
+
+    if (projErr || !project) return res.status(404).json({ error: 'Invalid timeline link.' });
+
+    const { data: updates, error: updateErr } = await supabaseAdmin
+      .from('project_updates')
+      .select('*')
+      .eq('project_id', project.id)
+      .order('created_at', { ascending: false });
+
+    if (updateErr) throw updateErr;
+
+    res.json({ project, updates });
+  } catch (err) {
+    console.error('[Public Timeline GET Error]:', err.message);
+    res.status(500).json({ error: 'Failed to load project timeline.' });
   }
 });
 
