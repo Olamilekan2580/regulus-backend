@@ -131,8 +131,11 @@ router.post('/', async (req, res) => {
     
     res.status(201).json(data);
   } catch (err) {
-    console.error('[Projects POST Error]:', err.message);
-    res.status(500).json({ error: 'Database execution failed during project initialization.' });
+    console.error('[Projects POST RAW Error]:', err);
+    // ⚠️ TEMPORARY DEBUG: Force the raw Postgres error to the frontend
+    res.status(500).json({ 
+      error: `DB ERROR: ${err.message || err.details || JSON.stringify(err)}` 
+    });
   }
 });
 
