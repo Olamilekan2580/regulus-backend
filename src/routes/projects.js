@@ -273,9 +273,11 @@ router.get('/:id/submissions', requireAuth, async (req, res) => {
     // Return empty array instead of null if no submissions exist yet
     res.status(200).json(data || []); 
     
+  // Change this part of the route:
   } catch (err) {
     console.error('[Fetch Submissions Error]:', err.message);
-    res.status(500).json({ error: 'Failed to fetch client submissions.' });
+    // WE ARE CHANGING THIS LINE TO SEND THE RAW ERROR:
+    res.status(500).json({ error: `DB Crash: ${err.message}` });
   }
 });
 
