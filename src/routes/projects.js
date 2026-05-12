@@ -1,12 +1,6 @@
 /**
  * @fileoverview Enterprise Project Management Routing
  * @architecture Multi-Tenant, RBAC Secured, Telemetry Enabled
- * * CRITICAL FIXES APPLIED:
- * - Solves Issue #9: Ripped out `freelancer_id`. All queries strictly scoped to `org_id` via `requireOrgMember`.
- * - Cross-Tenant Security: Added validation to ensure `client_id` belongs to the requesting `org_id` before insert.
- * - API Expansion: Added GET /:id, PUT /:id, and DELETE /:id endpoints.
- * - State Machine: Added strict status transition validation.
- * - Infrastructure: Added pagination and sorting to the GET list endpoint.
  */
 
 const express = require('express');
@@ -14,39 +8,27 @@ const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
 const { requireAuth, requireOrgMember } = require('../middleware/auth');
 
-// ==========================================
-// 🛡️ TELEMETRY & VALIDATION UTILITIES
-// ==========================================
+const VALID_STATUSES = ['Draft', 'Planning', 'Active', 'On Hold', 'Completed', 'Archived'];
 
-const VALID_STATUSES = ['Draft', 'Active', 'On Hold', 'Completed', 'Archived'];
-
-/**
- * Validates UUID v4 format to prevent malformed queries from crashing the database.
- */
 const isValidUUID = (uuid) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(uuid);
 };
 
-/**
- * Sanitizes string inputs to prevent basic XSS or malformed payloads.
- */
 const sanitizeText = (text) => {
   if (!text) return text;
-  return text.toString().trim().replace(/<[^>]*>?/gm, ''); // Strips HTML tags
+  return text.toString().trim().replace(/<[^>]*>?/gm, ''); 
 };
 
-// GLOBAL SECURITY: All routes require Auth AND Verified Organization Membership
+// GLOBAL SECURITY
 router.use(requireAuth);
-router.use(requireOrgMember); // Injects req.orgRole and ensures req.headers['x-org-id'] is valid
+router.use(requireOrgMember); 
 
 // ==========================================
-// 1. RETRIEVE ALL PROJECTS (WITH PAGINATION/FILTERS)
+// 1. RETRIEVE ALL PROJECTS
 // ==========================================
 router.get('/', async (req, res) => {
   const orgId = req.headers['x-org-id'];
-  
-  // Extract query parameters for filtering and pagination
   const { status, client_id, limit = 50, page = 1, search } = req.query;
   const offset = (page - 1) * limit;
 
@@ -54,33 +36,20 @@ router.get('/', async (req, res) => {
     let query = supabaseAdmin
       .from('projects')
       .select('*, clients(id, name, company)', { count: 'exact' })
-      .eq('org_id', orgId) // 🔒 CRITICAL: Strict Tenant Segregation
+      .eq('org_id', orgId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
-    // Apply optional filters
-    if (status && VALID_STATUSES.includes(status)) {
-      query = query.eq('status', status);
-    }
-    if (client_id && isValidUUID(client_id)) {
-      query = query.eq('client_id', client_id);
-    }
-    if (search) {
-      query = query.ilike('name', `%${sanitizeText(search)}%`);
-    }
+    if (status && VALID_STATUSES.includes(status)) query = query.eq('status', status);
+    if (client_id && isValidUUID(client_id)) query = query.eq('client_id', client_id);
+    if (search) query = query.ilike('name', `%${sanitizeText(search)}%`);
 
     const { data, error, count } = await query;
-
     if (error) throw error;
 
     res.status(200).json({
       data,
-      meta: {
-        total: count,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total_pages: Math.ceil(count / limit)
-      }
+      meta: { total: count, page: parseInt(page), limit: parseInt(limit), total_pages: Math.ceil(count / limit) }
     });
   } catch (err) {
     console.error('[Projects GET Error]:', err.message);
@@ -95,25 +64,17 @@ router.get('/:id', async (req, res) => {
   const orgId = req.headers['x-org-id'];
   const projectId = req.params.id;
 
-  if (!isValidUUID(projectId)) {
-    return res.status(400).json({ error: 'Malformed project identifier.' });
-  }
+  if (!isValidUUID(projectId)) return res.status(400).json({ error: 'Malformed project identifier.' });
 
   try {
     const { data, error } = await supabaseAdmin
       .from('projects')
-      .select(`
-        *,
-        clients(id, name, company, email)
-      `)
+      .select('*, clients(id, name, company, email)')
       .eq('id', projectId)
-      .eq('org_id', orgId) // 🔒 CRITICAL: Prevent fetching another org's project
+      .eq('org_id', orgId) 
       .single();
 
-    if (error || !data) {
-      return res.status(404).json({ error: 'Project not found or access denied.' });
-    }
-
+    if (error || !data) return res.status(404).json({ error: 'Project not found or access denied.' });
     res.status(200).json(data);
   } catch (err) {
     console.error('[Project GET:ID Error]:', err.message);
@@ -127,30 +88,17 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   const orgId = req.headers['x-org-id'];
   
-  // Extract and sanitize payload
   const client_id = req.body.client_id;
   const name = sanitizeText(req.body.name);
   const description = sanitizeText(req.body.description);
-  const value = parseFloat(req.body.value) || 0;
   const deadline = req.body.deadline;
-  const initial_status = req.body.status || 'Active';
+  const initial_status = req.body.status || 'Planning';
 
-  // 1. Payload Validation
-  if (!client_id || !name) {
-    return res.status(400).json({ error: 'Client ID and Project Name are required payload parameters.' });
-  }
-
-  if (!isValidUUID(client_id)) {
-    return res.status(400).json({ error: 'Malformed Client ID.' });
-  }
-
-  if (!VALID_STATUSES.includes(initial_status)) {
-    return res.status(400).json({ error: `Invalid status. Permitted values: ${VALID_STATUSES.join(', ')}` });
-  }
+  if (!client_id || !name) return res.status(400).json({ error: 'Client ID and Project Name are required.' });
+  if (!isValidUUID(client_id)) return res.status(400).json({ error: 'Malformed Client ID.' });
+  if (!VALID_STATUSES.includes(initial_status)) return res.status(400).json({ error: `Invalid status.` });
 
   try {
-    // 2. Cross-Tenant Security Check
-    // Prevent malicious user from linking to a client that belongs to another workspace
     const { data: clientCheck, error: clientErr } = await supabaseAdmin
       .from('clients')
       .select('id')
@@ -158,30 +106,28 @@ router.post('/', async (req, res) => {
       .eq('org_id', orgId)
       .single();
 
-    if (clientErr || !clientCheck) {
-      return res.status(403).json({ error: 'Security Exception: Target client does not exist within your workspace context.' });
+    if (clientErr || !clientCheck) return res.status(403).json({ error: 'Target client does not exist within your workspace.' });
+
+    // 🔒 THE FIX: Strictly align payload to known DB columns. Removed creator_id and value. Handled empty deadline.
+    const insertPayload = {
+      org_id: orgId,
+      client_id,
+      name,
+      description,
+      status: initial_status
+    };
+
+    if (deadline && deadline.trim() !== "") {
+      insertPayload.deadline = deadline;
     }
 
-    // 3. Database Execution
     const { data, error } = await supabaseAdmin
       .from('projects')
-      .insert([{ 
-        org_id: orgId, // 🔒 CRITICAL: Replaces freelancer_id
-        creator_id: req.user.id, // Audit trail: who actually made it
-        client_id, 
-        name, 
-        description, 
-        value, 
-        status: initial_status,
-        deadline: deadline || null
-      }])
+      .insert([insertPayload])
       .select('*, clients(name)')
       .single();
 
     if (error) throw error;
-    
-    // Telemetry log for system audit
-    console.log(`[PROJECT CREATED] Org: ${orgId} | Project: ${data.id} | Creator: ${req.user.id}`);
     
     res.status(201).json(data);
   } catch (err) {
@@ -191,41 +137,31 @@ router.post('/', async (req, res) => {
 });
 
 // ==========================================
-// 4. UPDATE PROJECT (MUTATION ENGINE)
+// 4. UPDATE PROJECT 
 // ==========================================
 router.put('/:id', async (req, res) => {
   const orgId = req.headers['x-org-id'];
   const projectId = req.params.id;
 
-  if (!isValidUUID(projectId)) {
-    return res.status(400).json({ error: 'Malformed project identifier.' });
-  }
+  if (!isValidUUID(projectId)) return res.status(400).json({ error: 'Malformed project identifier.' });
 
-  // Construct update payload safely
   const updatePayload = {};
-  
   if (req.body.name !== undefined) updatePayload.name = sanitizeText(req.body.name);
   if (req.body.description !== undefined) updatePayload.description = sanitizeText(req.body.description);
-  if (req.body.value !== undefined) updatePayload.value = parseFloat(req.body.value) || 0;
-  if (req.body.deadline !== undefined) updatePayload.deadline = req.body.deadline;
+  
+  if (req.body.deadline !== undefined) {
+    updatePayload.deadline = (req.body.deadline && req.body.deadline.trim() !== "") ? req.body.deadline : null;
+  }
   
   if (req.body.status !== undefined) {
-    if (!VALID_STATUSES.includes(req.body.status)) {
-      return res.status(400).json({ error: `Invalid status mapping. Permitted: ${VALID_STATUSES.join(', ')}` });
-    }
+    if (!VALID_STATUSES.includes(req.body.status)) return res.status(400).json({ error: 'Invalid status mapping.' });
     updatePayload.status = req.body.status;
   }
 
-  // Cannot update without payload
-  if (Object.keys(updatePayload).length === 0) {
-    return res.status(400).json({ error: 'Empty update payload provided.' });
-  }
-
-  // Update timestamp
+  if (Object.keys(updatePayload).length === 0) return res.status(400).json({ error: 'Empty update payload.' });
   updatePayload.updated_at = new Date().toISOString();
 
   try {
-    // Database Execution - Scope by orgId ensures cross-tenant mutation is impossible
     const { data, error } = await supabaseAdmin
       .from('projects')
       .update(updatePayload)
@@ -247,24 +183,17 @@ router.put('/:id', async (req, res) => {
 });
 
 // ==========================================
-// 5. DELETE PROJECT (RBAC PROTECTED)
+// 5. DELETE PROJECT
 // ==========================================
 router.delete('/:id', async (req, res) => {
   const orgId = req.headers['x-org-id'];
   const projectId = req.params.id;
-  const role = req.orgRole; // Injected by requireOrgMember
+  const role = req.orgRole; 
 
-  // 1. Role Verification - Only Owners and Admins can delete projects
-  if (role === 'member') {
-    return res.status(403).json({ error: 'Access denied. Project deletion requires elevated Administrator privileges.' });
-  }
-
-  if (!isValidUUID(projectId)) {
-    return res.status(400).json({ error: 'Malformed project identifier.' });
-  }
+  if (role === 'member') return res.status(403).json({ error: 'Access denied. Requires Admin privileges.' });
+  if (!isValidUUID(projectId)) return res.status(400).json({ error: 'Malformed project identifier.' });
 
   try {
-    // Check if project exists and has dependencies before blind delete
     const { data: projectCheck } = await supabaseAdmin
       .from('projects')
       .select('id')
@@ -272,11 +201,8 @@ router.delete('/:id', async (req, res) => {
       .eq('org_id', orgId)
       .single();
 
-    if (!projectCheck) {
-      return res.status(404).json({ error: 'Target project not found.' });
-    }
+    if (!projectCheck) return res.status(404).json({ error: 'Target project not found.' });
 
-    // Database Execution
     const { error } = await supabaseAdmin
       .from('projects')
       .delete()
@@ -284,30 +210,24 @@ router.delete('/:id', async (req, res) => {
       .eq('org_id', orgId);
 
     if (error) {
-      // Catch foreign key constraint failures (e.g., trying to delete a project that has active invoices)
       if (error.code === '23503') {
-        return res.status(409).json({ 
-          error: 'Constraint Violation', 
-          message: 'Cannot delete project. Active invoices or proposals are tethered to this record. Archive it instead.' 
-        });
+        return res.status(409).json({ error: 'Constraint Violation', message: 'Active invoices tethered to this record.' });
       }
       throw error;
     }
-
-    console.warn(`[PROJECT DELETED] Org: ${orgId} | Project: ${projectId} | Operator: ${req.user.id}`);
     res.status(200).json({ message: 'Project record permanently destroyed.' });
-
   } catch (err) {
     console.error('[Project DELETE Error]:', err.message);
-    res.status(500).json({ error: 'Database execution failed during record destruction.' });
+    res.status(500).json({ error: 'Database execution failed.' });
   }
 });
 
 // ==========================================
-// PUSH UPDATE TO CLIENT TIMELINE
+// 6. PUSH UPDATE TO CLIENT TIMELINE
 // ==========================================
-router.post('/:id/updates', requireAuth, async (req, res) => {
+router.post('/:id/updates', async (req, res) => {
   try {
+    const orgId = req.headers['x-org-id']; // Grab orgId to satisfy DB constraints
     const { title, description, files } = req.body;
     const projectId = req.params.id;
 
@@ -315,6 +235,7 @@ router.post('/:id/updates', requireAuth, async (req, res) => {
       .from('project_updates')
       .insert([{
         project_id: projectId,
+        org_id: orgId, // 🔒 THE FIX: Satisfies the multi-tenant constraint we added to the timeline
         title,
         description,
         files: files || []
