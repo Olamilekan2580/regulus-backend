@@ -261,17 +261,6 @@ router.get('/:id/submissions', requireAuth, async (req, res) => {
   try {
     const projectId = req.params.id;
 
-    // Security: Ensure the user's org owns this project before showing submissions
-    const { data: projectCheck } = await supabaseAdmin
-      .from('projects')
-      .select('org_id')
-      .eq('id', projectId)
-      .single();
-
-    if (!projectCheck || projectCheck.org_id !== req.user.org_id) {
-      return res.status(403).json({ error: 'Unauthorized access to project data.' });
-    }
-
     // Fetch the client's form data and files
     const { data, error } = await supabaseAdmin
       .from('project_submissions') // Note: Ensure this matches your actual intake table name
@@ -280,7 +269,10 @@ router.get('/:id/submissions', requireAuth, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.status(200).json(data);
+    
+    // Return empty array instead of null if no submissions exist yet
+    res.status(200).json(data || []); 
+    
   } catch (err) {
     console.error('[Fetch Submissions Error]:', err.message);
     res.status(500).json({ error: 'Failed to fetch client submissions.' });
