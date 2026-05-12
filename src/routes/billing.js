@@ -22,16 +22,35 @@ const PRICE_IDS = {
 // 1. GENERATE DYNAMIC SUBSCRIPTION CHECKOUT
 router.post('/subscribe', requireAuth, async (req, res) => {
   try {
-    // 🔒 THE FIX: Match the frontend payload's snake_case property
-    const { org_id, plan_tier } = req.body;
+    const { plan_tier } = req.body;
 
     if (!PRICE_IDS[plan_tier]) {
       return res.status(400).json({ error: 'Invalid plan tier selected.' });
     }
 
-    // 🔒 THE FIX: Query the DB with the correct org_id
-    const { data: org } = await supabaseAdmin.from('organizations').select('*').eq('id', org_id).single();
-    if (!org) return res.status(404).json({ error: 'Organization not found' });
+    // 🔒 THE ARCHITECTURAL FIX: Ignore the frontend payload. Securely look up the org_id using the authenticated user's ID.
+    const { data: membership, error: memErr } = await supabaseAdmin
+      .from('org_memberships')
+      .select('org_id')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (memErr || !membership || !membership.org_id) {
+      return res.status(404).json({ error: 'Organization membership not found for this user.' });
+    }
+
+    const orgId = membership.org_id;
+
+    // Verify the organization actually exists
+    const { data: org, error: orgErr } = await supabaseAdmin
+      .from('organizations')
+      .select('id')
+      .eq('id', orgId)
+      .single();
+      
+    if (orgErr || !org) {
+      return res.status(404).json({ error: 'Organization not found in database.' });
+    }
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -40,8 +59,8 @@ router.post('/subscribe', requireAuth, async (req, res) => {
         price: PRICE_IDS[plan_tier], 
         quantity: 1,
       }],
-      client_reference_id: org_id, // 🔒 THE FIX: Attach correct org_id for the webhook
-      metadata: { plan_tier }, // Pass the tier so the webhook knows what was bought
+      client_reference_id: orgId, // Attach the securely fetched org_id
+      metadata: { plan_tier },
       success_url: `${req.headers.origin}/settings?billing=success`,
       cancel_url: `${req.headers.origin}/settings?billing=canceled`,
     });
@@ -73,7 +92,7 @@ router.post('/webhook', express.raw({type: 'application/json'}), async (req, res
     if (orgId) {
       await supabaseAdmin.from('organizations').update({
         subscription_status: 'active',
-        plan_tier: planTier, // Properly updates solo vs agency
+        plan_tier: planTier, 
         stripe_customer_id: session.customer,
         stripe_subscription_id: session.subscription
       }).eq('id', orgId);
