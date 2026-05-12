@@ -108,9 +108,10 @@ router.post('/', async (req, res) => {
 
     if (clientErr || !clientCheck) return res.status(403).json({ error: 'Target client does not exist within your workspace.' });
 
-    // 🔒 THE FIX: Strictly align payload to known DB columns. Removed creator_id and value. Handled empty deadline.
+    // 🔒 THE RLS FIX: Restored creator_id to satisfy your Supabase database security policies
     const insertPayload = {
       org_id: orgId,
+      creator_id: req.user.id, 
       client_id,
       name,
       description,
