@@ -110,8 +110,7 @@ router.post('/', async (req, res) => {
 
     // 🔒 THE RLS FIX: Restored creator_id to satisfy your Supabase database security policies
     const insertPayload = {
-      org_id: orgId,
-      creator_id: req.user.id, 
+      org_id: orgId, 
       client_id,
       name,
       description,
