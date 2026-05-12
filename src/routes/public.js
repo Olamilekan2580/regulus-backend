@@ -317,4 +317,25 @@ router.get('/updates/:token', async (req, res) => {
   }
 });
 
+// POST/GET /api/public/domain-lookup
+router.get('/public/domain-lookup', async (req, res) => {
+  const { domain } = req.query;
+  if (!domain) return res.status(400).json({ error: 'Domain required' });
+
+  try {
+    const { data: org, error } = await supabaseAdmin
+      .from('organizations')
+      .select('id, name, brand_settings')
+      .eq('custom_domain', domain)
+      .eq('domain_status', 'active') // Only route if Vercel approved it
+      .single();
+
+    if (error || !org) return res.status(404).json({ error: 'Domain not found or inactive' });
+
+    res.status(200).json(org);
+  } catch (err) {
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
 module.exports = router;

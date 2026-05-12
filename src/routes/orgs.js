@@ -9,6 +9,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const axios = require('axios'); // NEW: Required for Vercel API calls
 const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
 const { requireAuth } = require('../middleware/auth');
@@ -482,6 +483,84 @@ router.put('/:id/integrations', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[Integration Update Error]:', err.message);
     res.status(500).json({ error: 'Failed to update integrations.' });
+  }
+});
+
+// ==========================================
+// 6. WHITE-LABEL ENGINE (CUSTOM DOMAINS)
+// ==========================================
+
+/**
+ * POST /:id/domain
+ * Registers a custom domain with Vercel's Edge Network
+ */
+router.post('/:id/domain', requireOrgRole(['owner', 'admin']), async (req, res) => {
+  const { domain } = req.body;
+  const orgId = req.params.id;
+
+  if (!domain) return res.status(400).json({ error: 'Domain is required' });
+
+  try {
+    // 1. Tell Vercel to attach this domain to your project
+    await axios.post(
+      `https://api.vercel.com/v9/projects/${process.env.VERCEL_PROJECT_ID}/domains`,
+      { name: domain },
+      { headers: { Authorization: `Bearer ${process.env.VERCEL_API_TOKEN}` } }
+    );
+
+    // 2. Update Supabase with the new domain and status
+    const { error: dbError } = await supabaseAdmin
+      .from('organizations')
+      .update({ custom_domain: domain, domain_status: 'pending' })
+      .eq('id', orgId);
+
+    if (dbError) throw dbError;
+
+    res.status(200).json({ message: 'Domain successfully registered with edge network.' });
+  } catch (error) {
+    console.error('[Vercel API Error]:', error.response?.data || error.message);
+    const errorMessage = error.response?.data?.error?.message || 'Failed to configure domain on edge network.';
+    res.status(500).json({ error: errorMessage });
+  }
+});
+
+/**
+ * DELETE /:id/domain
+ * Removes a custom domain from Vercel's Edge Network
+ */
+router.delete('/:id/domain', requireOrgRole(['owner', 'admin']), async (req, res) => {
+  const orgId = req.params.id;
+
+  try {
+    // 1. Fetch the domain to delete
+    const { data: org } = await supabaseAdmin
+      .from('organizations')
+      .select('custom_domain')
+      .eq('id', orgId)
+      .single();
+
+    if (org?.custom_domain) {
+      // 2. Delete from Vercel Edge Network
+      try {
+        await axios.delete(
+          `https://api.vercel.com/v9/projects/${process.env.VERCEL_PROJECT_ID}/domains/${org.custom_domain}`,
+          { headers: { Authorization: `Bearer ${process.env.VERCEL_API_TOKEN}` } }
+        );
+      } catch (vercelErr) {
+        console.warn('Domain might already be removed from Vercel, ignoring.', vercelErr.message);
+      }
+    }
+
+    // 3. Clear from Supabase
+    await supabaseAdmin
+      .from('organizations')
+      .update({ custom_domain: null, domain_status: 'none' })
+      .eq('id', orgId);
+
+    res.status(200).json({ message: 'Domain successfully removed.' });
+  } catch (error) {
+    console.error('[Vercel Delete Error]:', error.message);
+    res.status(500).json({ error: 'Failed to remove custom domain.' });
   }
 });
 
