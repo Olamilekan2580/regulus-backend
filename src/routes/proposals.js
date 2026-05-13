@@ -7,6 +7,7 @@
  * - Checkout Vulnerability Patched: The Stripe session generation now strictly enforces `org_id` ownership.
  * - RBAC Enforcement: Standard members cannot delete financial documents.
  * - Attachment Pipeline: Added multer and Supabase storage upload logic for PDF/Doc attachments.
+ * - Enterprise Documents: Added support for 7-section proposal structures.
  */
 
 const express = require('express');
@@ -77,13 +78,17 @@ router.get('/:id', async (req, res) => {
 // ==========================================
 // 2. CREATE PROPOSAL
 // ==========================================
-// 🔒 THE FIX: upload.single('attachment') catches the file from the FormData payload
 router.post('/', upload.single('attachment'), async (req, res) => {
   const orgId = req.headers['x-org-id'];
-  const { client_id, project_id, title, description, price, status } = req.body;
+  
+  // 🔒 Catch all document sections from the FormData
+  const { 
+    client_id, project_id, title, description, price, status,
+    executive_summary, objectives, proposed_solution, timeline, deliverables, assumptions 
+  } = req.body;
 
   if (!client_id || !title || price === undefined) {
-    return res.status(400).json({ error: 'Missing mandatory proposal parameters (client_id, title, price).' });
+    return res.status(400).json({ error: 'Missing mandatory proposal parameters.' });
   }
 
   if (!isValidUUID(client_id)) {
@@ -95,7 +100,6 @@ router.post('/', upload.single('attachment'), async (req, res) => {
 
     // 1. If a file was attached, upload it to Supabase Storage FIRST
     if (req.file) {
-      // Create a unique filename
       const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
       
       const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
@@ -115,7 +119,7 @@ router.post('/', upload.single('attachment'), async (req, res) => {
       attachmentUrl = publicUrlData.publicUrl;
     }
 
-    // 2. Execute the database insert, including the new attachmentUrl
+    // 2. Execute the database insert with all new sections
     const { data, error } = await supabaseAdmin
       .from('proposals')
       .insert([{ 
@@ -124,9 +128,15 @@ router.post('/', upload.single('attachment'), async (req, res) => {
         project_id: project_id || null, 
         title: title.trim(),            
         description: description ? description.trim() : null,      
+        executive_summary: executive_summary ? executive_summary.trim() : null,
+        objectives: objectives ? objectives.trim() : null,
+        proposed_solution: proposed_solution ? proposed_solution.trim() : null,
+        timeline: timeline ? timeline.trim() : null,
+        deliverables: deliverables ? deliverables.trim() : null,
+        assumptions: assumptions ? assumptions.trim() : null,
         price: parseFloat(price) || 0, 
         status: status || 'Draft',
-        attachment_url: attachmentUrl // <-- Save the link!
+        attachment_url: attachmentUrl 
       }])
       .select('*, clients(*)')
       .single();
@@ -150,7 +160,11 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ error: 'Malformed proposal identifier.' });
   }
 
-  const { project_id, title, description, price, timeline, status } = req.body;
+  // Ensure update payload catches the new sections
+  const { 
+    project_id, title, description, price, status,
+    executive_summary, objectives, proposed_solution, timeline, deliverables, assumptions 
+  } = req.body;
 
   try {
     const { data, error } = await supabaseAdmin
@@ -159,8 +173,13 @@ router.put('/:id', async (req, res) => {
         project_id, 
         title, 
         description, 
+        executive_summary,
+        objectives,
+        proposed_solution,
+        timeline,
+        deliverables,
+        assumptions,
         price: price !== undefined ? parseFloat(price) : undefined, 
-        timeline, 
         status,
         updated_at: new Date().toISOString()
       })
