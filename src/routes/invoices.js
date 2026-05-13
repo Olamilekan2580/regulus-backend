@@ -6,6 +6,7 @@
  * - Solves Issue #30: `triggerOnboardingWorkflow` is properly awaited with a non-blocking timeout strategy.
  * - Integration: Wired up `pdfService.js` to enable server-side PDF generation.
  * - Centralized Security: Replaced manual org checks with `requireOrgMember`.
+ * - Route Fix: async added to POST and orphaned brackets removed.
  */
 
 const express = require('express');
@@ -93,38 +94,6 @@ router.post('/', async (req, res) => {
         creator_id: req.user.id, // Audit trail
         client_id, 
         project_id: project_id || null, // 🔒 THE FIX: Pass the project_id to Supabase
-        invoice_number, 
-        total: parseFloat(total) || 0, 
-        currency: baseCurrency,
-        base_currency_total: parseFloat(baseTotal.toFixed(2)),
-        exchange_rate_at_creation: rate,
-        status: status || 'Draft', 
-        due_date: due_date || null,
-        line_items: Array.isArray(line_items) ? line_items : []
-      }])
-      .select('*, clients(*)')
-      .single();
-
-    if (error) throw error;
-    res.status(201).json(data);
-  } catch (err) {
-    console.error('[Invoices POST Error]:', err.message);
-    res.status(500).json({ error: 'Database execution failed during invoice generation.' });
-  }
-});
-
-    // 2. CURRENCY CALCULATION (Dynamic FX via Service)
-    const baseCurrency = currency || 'USD';
-    let rate = await getExchangeRate(baseCurrency, 'USD');
-    const baseTotal = parseFloat(total) * rate;
-
-    // 3. DATABASE EXECUTION
-    const { data, error } = await supabaseAdmin
-      .from('invoices')
-      .insert([{ 
-        org_id: orgId, 
-        creator_id: req.user.id, // Audit trail
-        client_id, 
         invoice_number, 
         total: parseFloat(total) || 0, 
         currency: baseCurrency,
