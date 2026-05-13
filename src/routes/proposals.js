@@ -6,12 +6,15 @@
  * - Centralized Security: Replaced manual `org_id` checks with the bulletproof `requireOrgMember` middleware.
  * - Checkout Vulnerability Patched: The Stripe session generation now strictly enforces `org_id` ownership.
  * - RBAC Enforcement: Standard members cannot delete financial documents.
+ * - Attachment Pipeline: Added multer and Supabase storage upload logic for PDF/Doc attachments.
  */
 
 const express = require('express');
 const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
 const { requireAuth, requireOrgMember } = require('../middleware/auth');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() }); // Keep file in memory temporarily
 
 // ==========================================
 // 🛡️ UTILITIES
@@ -74,53 +77,65 @@ router.get('/:id', async (req, res) => {
 // ==========================================
 // 2. CREATE PROPOSAL
 // ==========================================
-router.post('/', async (req, res) => {
+// 🔒 THE FIX: upload.single('attachment') catches the file from the FormData payload
+router.post('/', upload.single('attachment'), async (req, res) => {
   const orgId = req.headers['x-org-id'];
-  const { project_id, title, description, price, timeline } = req.body;
+  const { client_id, project_id, title, description, price, status } = req.body;
 
-  if (!project_id || !title || price === undefined) {
-    return res.status(400).json({ error: 'Missing mandatory proposal parameters (project_id, title, price).' });
+  if (!client_id || !title || price === undefined) {
+    return res.status(400).json({ error: 'Missing mandatory proposal parameters (client_id, title, price).' });
   }
 
-  if (!isValidUUID(project_id)) {
-    return res.status(400).json({ error: 'Malformed project identifier.' });
+  if (!isValidUUID(client_id)) {
+    return res.status(400).json({ error: 'Malformed client identifier.' });
   }
 
   try {
-    // SECURITY: Verify the target project actually belongs to the requesting workspace
-    const { data: projectData, error: projectError } = await supabaseAdmin
-      .from('projects')
-      .select('client_id, name')
-      .eq('id', project_id)
-      .eq('org_id', orgId) // 🔒 Prevents cross-tenant linking
-      .single();
+    let attachmentUrl = null;
+
+    // 1. If a file was attached, upload it to Supabase Storage FIRST
+    if (req.file) {
+      // Create a unique filename
+      const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
       
-    if (projectError || !projectData) {
-      console.warn(`[SECURITY WARN] User ${req.user.id} attempted to link proposal to unowned project ${project_id}`);
-      return res.status(403).json({ error: 'Security Exception: Target project is not linked to your workspace.' });
+      const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+        .from('attachments')
+        .upload(`proposals/${fileName}`, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: false
+        });
+
+      if (uploadError) throw new Error(`Storage Upload Failed: ${uploadError.message}`);
+
+      // Get the public URL of the uploaded file
+      const { data: publicUrlData } = supabaseAdmin.storage
+        .from('attachments')
+        .getPublicUrl(uploadData.path);
+        
+      attachmentUrl = publicUrlData.publicUrl;
     }
 
-    // Database Execution
+    // 2. Execute the database insert, including the new attachmentUrl
     const { data, error } = await supabaseAdmin
       .from('proposals')
       .insert([{ 
         org_id: orgId, 
-        client_id: projectData.client_id,
-        project_id, 
+        client_id,
+        project_id: project_id || null, 
         title: title.trim(),            
         description: description ? description.trim() : null,      
         price: parseFloat(price) || 0, 
-        timeline: timeline ? timeline.trim() : null,
-        status: 'Draft'
+        status: status || 'Draft',
+        attachment_url: attachmentUrl // <-- Save the link!
       }])
-      .select()
+      .select('*, clients(*)')
       .single();
 
     if (error) throw error;
     res.status(201).json(data);
   } catch (err) {
     console.error('[Proposals POST Error]:', err.message);
-    res.status(500).json({ error: 'Database execution failed during proposal generation.' });
+    res.status(500).json({ error: err.message || 'Database execution failed during proposal generation.' });
   }
 });
 
