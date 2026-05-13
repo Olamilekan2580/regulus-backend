@@ -48,6 +48,30 @@ router.get('/', async (req, res) => {
 });
 
 // ==========================================
+// FETCH SINGLE PROPOSAL (BY ID)
+// ==========================================
+router.get('/:id', async (req, res) => {
+  const proposalId = req.params.id;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('proposals')
+      .select('*, clients(*)')
+      .eq('id', proposalId)
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({ error: 'Proposal not found or deleted.' });
+    }
+
+    res.status(200).json(data);
+  } catch (err) {
+    console.error('[Single Proposal GET Error]:', err.message);
+    res.status(500).json({ error: 'Failed to retrieve proposal document.' });
+  }
+});
+
+// ==========================================
 // 2. CREATE PROPOSAL
 // ==========================================
 router.post('/', async (req, res) => {
