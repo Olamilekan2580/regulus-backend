@@ -110,7 +110,8 @@ router.post('/', async (req, res) => {
     res.status(201).json(data);
   } catch (err) {
     console.error('[Invoices POST Error]:', err.message);
-    res.status(500).json({ error: 'Database execution failed during invoice generation.' });
+    // TEMPORARY DEBUG FIX: Send the exact SQL error to the frontend UI
+    res.status(500).json({ error: `DB Error: ${err.message}` }); 
   }
 });
 
