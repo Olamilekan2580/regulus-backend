@@ -55,7 +55,9 @@ router.get('/', async (req, res) => {
 // ==========================================
 router.post('/', async (req, res) => {
   const orgId = req.headers['x-org-id'];
-  const { client_id, invoice_number, total, status, due_date, currency, line_items } = req.body;
+  
+  // 🔒 THE FIX: Added project_id to the destructuring
+  const { client_id, project_id, invoice_number, total, status, due_date, currency, line_items } = req.body;
 
   if (!client_id || !invoice_number || total === undefined) {
     return res.status(400).json({ error: 'Missing mandatory parameters (client_id, invoice_number, total).' });
@@ -77,6 +79,39 @@ router.post('/', async (req, res) => {
     if (clientErr || !clientCheck) {
       return res.status(403).json({ error: 'Security Exception: Client does not reside within your workspace.' });
     }
+
+    // 2. CURRENCY CALCULATION (Dynamic FX via Service)
+    const baseCurrency = currency || 'USD';
+    let rate = await getExchangeRate(baseCurrency, 'USD');
+    const baseTotal = parseFloat(total) * rate;
+
+    // 3. DATABASE EXECUTION
+    const { data, error } = await supabaseAdmin
+      .from('invoices')
+      .insert([{ 
+        org_id: orgId, 
+        creator_id: req.user.id, // Audit trail
+        client_id, 
+        project_id: project_id || null, // 🔒 THE FIX: Pass the project_id to Supabase
+        invoice_number, 
+        total: parseFloat(total) || 0, 
+        currency: baseCurrency,
+        base_currency_total: parseFloat(baseTotal.toFixed(2)),
+        exchange_rate_at_creation: rate,
+        status: status || 'Draft', 
+        due_date: due_date || null,
+        line_items: Array.isArray(line_items) ? line_items : []
+      }])
+      .select('*, clients(*)')
+      .single();
+
+    if (error) throw error;
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('[Invoices POST Error]:', err.message);
+    res.status(500).json({ error: 'Database execution failed during invoice generation.' });
+  }
+});
 
     // 2. CURRENCY CALCULATION (Dynamic FX via Service)
     const baseCurrency = currency || 'USD';
