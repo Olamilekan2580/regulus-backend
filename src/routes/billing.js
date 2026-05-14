@@ -77,7 +77,7 @@ router.post('/subscribe', requireAuth, async (req, res) => {
       customizations: {
         title: "Regulus Platform",
         description: `Upgrade to ${plan_tier.toUpperCase()} Subscription`,
-        logo: "https://your-regulus-logo.com/icon.png",
+        logo: "https://regulus-frontend.vercel.app/reglogo.png",
       }
     };
 

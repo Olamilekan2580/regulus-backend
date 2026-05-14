@@ -306,7 +306,7 @@ router.post('/invoices/:id/flutterwave-checkout', async (req, res) => {
       customizations: {
         title: org.name || "Regulus Freelancer",
         description: `Payment for Invoice #${invoice.invoice_number}`,
-        logo: "https://your-logo-url.com/logo.png",
+        logo: "https://regulus-frontend.vercel.app/reglogo.png",
       },
       subaccounts: [
         {
