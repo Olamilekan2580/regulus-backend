@@ -12,21 +12,21 @@ router.post('/connect', async (req, res) => {
   }
 
   try {
-    // 1. Fetch workspace details
+    // 1. Fetch workspace details (FIXED: Using * to prevent missing column crashes)
     const { data: org, error: orgError } = await supabase
       .from('organizations')
-      .select('name, email') 
+      .select('*') 
       .eq('id', org_id)
       .single();
 
     if (orgError || !org) {
-      return res.status(404).json({ error: 'Workspace not found.' });
+      return res.status(404).json({ error: 'Workspace not found in database.' });
     }
 
     // 2. Construct Flutterwave Payload
     const flwPayload = {
       business_name: org.name || `Regulus Workspace ${org_id.substring(0,6)}`,
-      business_email: org.email || 'billing@regulus.io', 
+      business_email: 'billing@regulus.io', // Hardcoded fallback since you don't have an email column
       account_number: account_number,
       business_contact_mobile: '09000000000', 
       business_mobile: '09000000000',
@@ -61,11 +61,11 @@ router.post('/connect', async (req, res) => {
 
     const subaccountId = flwResponse.data.data.subaccount_id;
 
-    // 4. Update the correct columns in the organizations table
+    // 4. Update the correct Multi-Currency columns in the database
     const updatePayload = {};
     if (payout_type === 'NGN') {
       updatePayload.fw_subaccount_ngn = subaccountId;
-      updatePayload.ngn_bank_name = bank_name;
+      updatePayload.ngn_bank_name = bank_name; // from the mapped array in Settings.jsx
       updatePayload.ngn_account_number = account_number;
     } else {
       updatePayload.fw_subaccount_usd = subaccountId;
@@ -79,12 +79,14 @@ router.post('/connect', async (req, res) => {
       .eq('id', org_id);
 
     if (updateError) {
+      console.error('Supabase Update Error:', updateError);
       return res.status(500).json({ error: 'Verified with Flutterwave, but failed to update local database.' });
     }
 
     return res.status(200).json({ success: true, subaccount_id: subaccountId });
 
   } catch (error) {
+    console.error('Flutterwave API Error:', error.response?.data || error.message);
     const flwErrorMsg = error.response?.data?.message || 'Flutterwave verification failed.';
     return res.status(400).json({ error: flwErrorMsg });
   }
