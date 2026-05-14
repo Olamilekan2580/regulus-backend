@@ -13,14 +13,22 @@ router.post('/connect', async (req, res) => {
 
   try {
     // 1. Fetch workspace details
+    // 1. Fetch the workspace details
     const { data: org, error: orgError } = await supabase
       .from('organizations')
-      .select('name, email') 
+      .select('*') // Changed to select everything to prevent missing column crashes
       .eq('id', org_id)
       .single();
 
+    // THE DIAGNOSTIC RADAR
+    console.log("==========================================");
+    console.log("[PAYOUT CHECK] Target Org ID:", org_id);
+    console.log("[PAYOUT CHECK] Database Error:", orgError);
+    console.log("[PAYOUT CHECK] Database Result:", org);
+    console.log("==========================================");
+
     if (orgError || !org) {
-      return res.status(404).json({ error: 'Workspace not found.' });
+      return res.status(404).json({ error: 'Workspace not found in database.' });
     }
 
     // 2. Construct Flutterwave Payload
