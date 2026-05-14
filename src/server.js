@@ -19,7 +19,8 @@ const settingsRoutes = require('./routes/settings');
 const orgRoutes = require('./routes/orgs');
 const billingRoutes = require('./routes/billing');
 const updatesRoutes = require('./routes/updates'); 
-const portalRoutes = require('./routes/portal');   
+const portalRoutes = require('./routes/portal');
+const payoutRoutes = require('./routes/payouts');   
 
 // Premium Feature Imports
 const vaultRoutes = require('./routes/vault');
@@ -96,7 +97,8 @@ app.use('/api/clients', requireAuth, billingGuard, clientRoutes);
 app.use('/api/projects', requireAuth, billingGuard, projectRoutes);
 app.use('/api/invoices', requireAuth, billingGuard, invoiceRoutes);
 app.use('/api/proposals', requireAuth, billingGuard, proposalRoutes);
-app.use('/api/updates', requireAuth, billingGuard, updatesRoutes); 
+app.use('/api/updates', requireAuth, billingGuard, updatesRoutes);
+app.use('/api/payouts', requireAuth, billingGuard, payoutRoutes); 
 
 // Regulus Enterprise Features (LOCKED DOWN)
 app.use('/api/vault', requireAuth, billingGuard, vaultRoutes);
