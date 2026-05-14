@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const supabase = require('../lib/supabase'); // Adjust path if your supabase client is located elsewhere
+const supabase = require('../config/supabase'); // Adjust path if your supabase client is located elsewhere
 
 // POST /api/payouts/connect
 router.post('/connect', async (req, res) => {
