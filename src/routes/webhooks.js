@@ -1,63 +1,137 @@
 const express = require('express');
 const router = express.Router();
-const crypto = require('crypto');
 const supabaseAdmin = require('../config/supabase');
+const crypto = require('crypto');
 
-// ---------------------------------------------------------
-// 1. TENANT WEBHOOK: How your freelancers get paid by clients
-// ---------------------------------------------------------
-router.post('/paystack', async (req, res) => {
-  try {
-    const event = req.body;
-    const freelancerId = event.data?.metadata?.freelancer_id;
-    if (!freelancerId) return res.status(400).send('Missing freelancer context');
+/**
+ * @fileoverview Enterprise Webhook & Lifecycle Dispatcher
+ * @architecture Atomic State Promotion / Event-Driven
+ * This handles the critical transition from "Money Received" to "Work Started".
+ */
 
-    const { data: settings } = await supabaseAdmin.from('freelancer_settings').select('paystack_secret_key').eq('freelancer_id', freelancerId).single();
-    if (!settings || !settings.paystack_secret_key) return res.status(400).send('Gateway not configured');
+// --- LIFECYCLE HELPERS ---
 
-    const hash = crypto.createHmac('sha512', settings.paystack_secret_key).update(JSON.stringify(req.body)).digest('hex');
-    if (hash !== req.headers['x-paystack-signature']) return res.status(401).send('Invalid signature');
+/**
+ * Promotes a project to 'Active' status and ensures the client has access.
+ */
+async function igniteProject(projectId) {
+  const intakeToken = crypto.randomBytes(32).toString('hex');
+  
+  const { error } = await supabaseAdmin
+    .from('projects')
+    .update({
+      status: 'Active',
+      activated_at: new Date().toISOString(),
+      intake_token: intakeToken, // Secure link for the client to submit requirements
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', projectId);
 
-    if (event.event === 'charge.success') {
-      const invoiceId = event.data.metadata.invoice_id;
-      await supabaseAdmin.from('invoices').update({ status: 'Paid' }).eq('id', invoiceId);
-    }
-    res.status(200).send('Tenant webhook processed');
-  } catch (err) {
-    res.status(500).send('Internal error');
+  if (error) {
+    console.error(`[LIFECYCLE ERROR] Failed to ignite project ${projectId}:`, error.message);
+    throw error;
   }
-});
+  
+  return intakeToken;
+}
 
-// ---------------------------------------------------------
-// 2. PLATFORM WEBHOOK: How YOU get paid by freelancers
-// ---------------------------------------------------------
-router.post('/platform', async (req, res) => {
+/**
+ * Handler: Client -> Freelancer Payment
+ */
+async function handleInvoicePayment(payload, invoiceId) {
+  // 1. Fetch Invoice + Project metadata
+  const { data: invoice, error: fetchErr } = await supabaseAdmin
+    .from('invoices')
+    .select('status, project_id, org_id, total, currency')
+    .eq('id', invoiceId)
+    .single();
+
+  if (fetchErr || !invoice) throw new Error('INVOICE_NOT_FOUND');
+  
+  // Idempotency check: Don't process twice if FLW sends multiple webhooks
+  if (invoice.status === 'Paid') {
+    console.log(`[IDEMPOTENCY] Invoice ${invoiceId} already handled.`);
+    return;
+  }
+
+  // 2. Mark Invoice as Paid
+  const { error: invUpdateErr } = await supabaseAdmin
+    .from('invoices')
+    .update({ 
+      status: 'Paid',
+      payment_meta: payload,
+      updated_at: new Date().toISOString() 
+    })
+    .eq('id', invoiceId);
+
+  if (invUpdateErr) throw invUpdateErr;
+
+  // 3. Project Promotion (The Ignition)
+  if (invoice.project_id) {
+    await igniteProject(invoice.project_id);
+    console.log(`[LIFECYCLE] Project ${invoice.project_id} promoted to ACTIVE.`);
+  }
+
+  // 4. TODO: Dispatch Post-Payment Notification (n8n / Email)
+  console.log(`[RECONCILIATION] Transaction verified for Org: ${invoice.org_id}`);
+}
+
+/**
+ * Handler: Freelancer -> Platform Subscription
+ */
+async function handleSaaSUpgrade(payload, orgId, planTier) {
+  const { error } = await supabaseAdmin
+    .from('organizations')
+    .update({ 
+      subscription_status: 'active',
+      plan_tier: planTier,
+      last_billing_date: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', orgId);
+
+  if (error) throw error;
+  console.log(`[BILLING] Org ${orgId} upgraded to ${planTier.toUpperCase()}.`);
+}
+
+// --- MAIN DISPATCHER ---
+
+router.post('/flutterwave', async (req, res) => {
+  const secretHash = process.env.FLW_WEBHOOK_HASH;
+  const signature = req.headers['verif-hash'];
+
+  // 1. Security Handshake
+  if (!signature || signature !== secretHash) {
+    console.warn('[SECURITY] Blocked unauthorized webhook attempt from:', req.ip);
+    return res.status(401).end();
+  }
+
+  const payload = req.body;
+
+  // 2. Acknowledge Receipt (Avoid FLW timeouts)
+  res.status(200).end();
+
   try {
-    // Verified using YOUR master secret key from the .env file
-    const secret = process.env.PAYSTACK_SECRET_KEY; 
-    const hash = crypto.createHmac('sha512', secret).update(JSON.stringify(req.body)).digest('hex');
-    
-    if (hash !== req.headers['x-paystack-signature']) {
-      return res.status(401).send('Invalid platform signature');
+    // 3. Status Filter
+    if (payload.status !== 'successful') return;
+
+    const txRef = payload.tx_ref;
+
+    // 4. Event Dispatching
+    if (txRef.startsWith('regulus-inv-')) {
+      const invoiceId = txRef.split('-')[2];
+      await handleInvoicePayment(payload, invoiceId);
+    } 
+    else if (txRef.startsWith('regulus-sub-')) {
+      const parts = txRef.split('-');
+      const orgId = parts[2];
+      const planTier = parts[3];
+      await handleSaaSUpgrade(payload, orgId, planTier);
     }
 
-    const event = req.body;
-    if (event.event === 'charge.success' || event.event === 'subscription.create') {
-      const freelancerId = event.data.metadata.freelancer_id;
-      
-      // Upgrade their account in the database so the middleware unlocks them
-      await supabaseAdmin.from('freelancer_settings').update({ 
-        subscription_status: 'active',
-        trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // +30 days
-      }).eq('freelancer_id', freelancerId);
-      
-      console.log(`[REVENUE] Platform subscription activated for: ${freelancerId}`);
-    }
-
-    res.status(200).send('Platform webhook processed');
   } catch (err) {
-    console.error('[Platform Webhook Error]:', err.message);
-    res.status(500).send('Internal error');
+    console.error('[WEBHOOK CRITICAL FAILURE]:', err.message);
+    // In production, log to Sentry/Datadog here
   }
 });
 

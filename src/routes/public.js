@@ -1,20 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
-let stripe;
+const axios = require('axios');
+const crypto = require('crypto');
 
-if (process.env.STRIPE_SECRET_KEY) {
-  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-} else {
-  console.warn('⚠️ CRITICAL: STRIPE_SECRET_KEY is missing from environment variables. Payments disabled.');
-  // We initialize with a dummy key so the server boots up, but runtime payments will fail.
-  stripe = require('stripe')('sk_test_dummy'); 
-}
+/**
+ * @fileoverview ENTERPRISE PUBLIC GATEWAY
+ * @architecture Flutterwave-Native, Zero-Trust, Token-Validated
+ * Handles: Public Portals, Proposals, Vaults, Intake, and Smart Checkout.
+ */
 
-const axios = require('axios'); // Needed to verify Paystack transactions
-const crypto = require('crypto'); // Needed for the Vault
-
-// Crypto Configuration
+// --- SECURITY CONFIGURATION ---
 const ALGORITHM = 'aes-256-cbc';
 const getEncryptionKey = () => {
   const key = process.env.ENCRYPTION_KEY;
@@ -23,7 +19,7 @@ const getEncryptionKey = () => {
 };
 
 // ==========================================
-// 1. FETCH PORTAL DATA (Upgraded to org_id)
+// 1. PUBLIC PORTAL ENGINE (Multi-Tenant)
 // ==========================================
 router.get('/portal/:clientId', async (req, res) => {
   try {
@@ -40,7 +36,7 @@ router.get('/portal/:clientId', async (req, res) => {
     const [projectRes, invoiceRes, settingsRes, proposalRes] = await Promise.all([
       supabaseAdmin.from('projects').select('*').eq('client_id', clientId).order('created_at', { ascending: false }),
       supabaseAdmin.from('invoices').select('*').eq('client_id', clientId).order('created_at', { ascending: false }),
-      supabaseAdmin.from('organizations').select('paystack_public_key, brand_name, brand_color, provider').eq('id', client.org_id).single(),
+      supabaseAdmin.from('organizations').select('brand_name, brand_settings').eq('id', client.org_id).single(),
       supabaseAdmin.from('proposals').select('*, projects(name)').eq('client_id', clientId).order('created_at', { ascending: false })
     ]);
 
@@ -49,7 +45,7 @@ router.get('/portal/:clientId', async (req, res) => {
       projects: projectRes.data || [],
       invoices: invoiceRes.data || [],
       proposals: proposalRes.data || [],
-      settings: settingsRes.data || { brand_name: 'Regulus', brand_color: '#1E293B', provider: null }
+      settings: settingsRes.data || { brand_name: 'Regulus', brand_settings: {} }
     });
   } catch (err) {
     console.error('[Public Portal Error]:', err.message);
@@ -58,7 +54,7 @@ router.get('/portal/:clientId', async (req, res) => {
 });
 
 // ==========================================
-// 2. PROPOSAL STATUS UPDATE (Basic Accept/Reject)
+// 2. PROPOSAL STATUS UPDATE
 // ==========================================
 router.put('/proposals/:proposalId/status', async (req, res) => {
   try {
@@ -71,7 +67,7 @@ router.put('/proposals/:proposalId/status', async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from('proposals')
-      .update({ status })
+      .update({ status, updated_at: new Date().toISOString() })
       .eq('id', proposalId)
       .select()
       .single();
@@ -84,119 +80,7 @@ router.put('/proposals/:proposalId/status', async (req, res) => {
 });
 
 // ==========================================
-// 3. STRIPE CHECKOUT GENERATORS
-// ==========================================
-router.post('/proposals/:id/stripe-checkout', async (req, res) => {
-  try {
-    const { data: proposal } = await supabaseAdmin.from('proposals').select('*, clients(email)').eq('id', req.params.id).single();
-    if (!proposal) return res.status(404).json({ error: 'Proposal not found' });
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      customer_email: proposal.clients?.email,
-      line_items: [{
-        price_data: { currency: 'usd', product_data: { name: `Proposal: ${proposal.title}` }, unit_amount: Math.round(parseFloat(proposal.price) * 100) },
-        quantity: 1,
-      }],
-      mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/${proposal.client_id}?success=true&proposal_id=${proposal.id}&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/${proposal.client_id}`,
-    });
-
-    res.json({ url: session.url });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to initialize Stripe' });
-  }
-});
-
-router.post('/invoices/:id/stripe-checkout', async (req, res) => {
-  try {
-    const { data: invoice } = await supabaseAdmin.from('invoices').select('*, clients(email)').eq('id', req.params.id).single();
-    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      customer_email: invoice.clients?.email,
-      line_items: [{
-        price_data: { currency: (invoice.currency || 'usd').toLowerCase(), product_data: { name: `Invoice: ${invoice.invoice_number}` }, unit_amount: Math.round(parseFloat(invoice.total) * 100) },
-        quantity: 1,
-      }],
-      mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/${invoice.client_id}?success=true&invoice_id=${invoice.id}&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/portal/${invoice.client_id}`,
-    });
-
-    res.json({ url: session.url });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to initialize Stripe' });
-  }
-});
-
-// ==========================================
-// 4. SECURE PAYMENT VERIFICATION WEBHOOKS
-// ==========================================
-router.post('/invoices/:id/verify-stripe', async (req, res) => {
-  try {
-    const { session_id } = req.body;
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-    if (session.payment_status === 'paid') {
-      await supabaseAdmin.from('invoices').update({ status: 'Paid' }).eq('id', req.params.id);
-      return res.json({ success: true });
-    }
-    res.status(400).json({ error: 'Payment not completed' });
-  } catch (err) {
-    res.status(500).json({ error: 'Verification failed' });
-  }
-});
-
-router.post('/invoices/:id/verify-paystack', async (req, res) => {
-  try {
-    const { reference } = req.body;
-    const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
-      headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
-    });
-    if (response.data.data.status === 'success') {
-      await supabaseAdmin.from('invoices').update({ status: 'Paid' }).eq('id', req.params.id);
-      return res.json({ success: true });
-    }
-    res.status(400).json({ error: 'Payment not successful on Paystack' });
-  } catch (err) {
-    res.status(500).json({ error: 'Paystack Verification failed' });
-  }
-});
-
-router.post('/proposals/:id/verify-stripe', async (req, res) => {
-  try {
-    const { session_id } = req.body;
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-    if (session.payment_status === 'paid') {
-      await supabaseAdmin.from('proposals').update({ status: 'Approved' }).eq('id', req.params.id);
-      return res.json({ success: true });
-    }
-    res.status(400).json({ error: 'Payment not completed' });
-  } catch (err) {
-    res.status(500).json({ error: 'Verification failed' });
-  }
-});
-
-router.post('/proposals/:id/verify-paystack', async (req, res) => {
-  try {
-    const { reference } = req.body;
-    const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
-      headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
-    });
-    if (response.data.data.status === 'success') {
-      await supabaseAdmin.from('proposals').update({ status: 'Approved' }).eq('id', req.params.id);
-      return res.json({ success: true });
-    }
-    res.status(400).json({ error: 'Payment not successful on Paystack' });
-  } catch (err) {
-    res.status(500).json({ error: 'Paystack Verification failed' });
-  }
-});
-
-// ==========================================
-// 5. PUBLIC VAULT REVEAL (Burn-on-Read)
+// 3. SECURE CREDENTIAL VAULT (Burn-on-Read)
 // ==========================================
 router.post('/vault/:id/reveal', async (req, res) => {
   try {
@@ -222,7 +106,7 @@ router.post('/vault/:id/reveal', async (req, res) => {
     if (secretData.requires_burn) {
       await supabaseAdmin.from('credential_vault').delete().eq('id', id);
     } else {
-      await supabaseAdmin.from('credential_vault').update({ is_viewed: true }).eq('id', id);
+      await supabaseAdmin.from('credential_vault').update({ is_viewed: true, last_viewed_at: new Date().toISOString() }).eq('id', id);
     }
 
     res.status(200).json({ 
@@ -237,61 +121,81 @@ router.post('/vault/:id/reveal', async (req, res) => {
 });
 
 // ==========================================
-// 6. ASYNC CLIENT INTAKE & UPDATES (NEW)
+// 4. ASYNC CLIENT INTAKE & UPDATES 
 // ==========================================
-
-// A. Fetch Intake Form Details via Secure Token
 router.get('/intake/:token', async (req, res) => {
   try {
     const { data: project, error } = await supabaseAdmin
       .from('projects')
-      .select('id, name, description, intake_submitted, clients(name, company)')
+      .select('id, name, description, intake_submitted, clients(name, company, org_id)')
       .eq('intake_token', req.params.token)
       .single();
 
     if (error || !project) return res.status(404).json({ error: 'Invalid or expired intake link.' });
-    if (project.intake_submitted) return res.status(400).json({ error: 'Intake form already submitted.' });
+    
+    // 🔒 LIFECYCLE GATE: Prevent modification of locked briefs
+    if (project.intake_submitted) {
+      return res.status(403).json({ error: 'Project brief has already been locked and submitted.' });
+    }
 
-    res.json(project);
+    // Fetch organization branding so the public intake page looks professional
+    let orgBranding = { name: 'Regulus Workspace', brand_settings: {} };
+    if (project.clients?.org_id) {
+      const { data: org } = await supabaseAdmin
+        .from('organizations')
+        .select('name, brand_settings')
+        .eq('id', project.clients.org_id)
+        .single();
+      if (org) orgBranding = org;
+    }
+
+    res.status(200).json({ project, organization: orgBranding });
   } catch (err) {
     console.error('[Public Intake GET Error]:', err.message);
     res.status(500).json({ error: 'Failed to load intake portal.' });
   }
 });
 
-// B. Submit Intake Form Requirements
 router.post('/intake/:token', async (req, res) => {
-  const { requirements } = req.body; 
-  // Note: Frontend handles actual file upload to Supabase Storage, we just save the text state here
+  const { requirements, assets = [] } = req.body; 
+  
+  if (!requirements) {
+    return res.status(400).json({ error: 'Project brief is mandatory.' });
+  }
   
   try {
     const { data: project, error: fetchErr } = await supabaseAdmin
       .from('projects')
-      .select('id')
+      .select('id, intake_submitted')
       .eq('intake_token', req.params.token)
       .single();
 
     if (fetchErr || !project) return res.status(404).json({ error: 'Invalid link.' });
+    
+    // 🔒 PREVENT DOUBLE SUBMISSION
+    if (project.intake_submitted) return res.status(403).json({ error: 'Project brief is already locked.' });
 
+    // ATOMIC PROMOTION: Save requirements and move to "In Progress"
     const { error: updateErr } = await supabaseAdmin
       .from('projects')
       .update({ 
         client_requirements: requirements,
+        project_assets: assets,
         intake_submitted: true, 
-        status: 'Active' // Automatically move project out of Draft
+        status: 'In Progress', 
+        intake_submitted_at: new Date().toISOString()
       })
       .eq('id', project.id);
 
     if (updateErr) throw updateErr;
 
-    res.json({ message: 'Project details securely transmitted to your freelancer.' });
+    res.json({ success: true, message: 'Requirements securely transmitted and project started.' });
   } catch (err) {
     console.error('[Public Intake POST Error]:', err.message);
     res.status(500).json({ error: 'Failed to submit project details.' });
   }
 });
 
-// C. Fetch Project Timeline/Updates via Secure Token
 router.get('/updates/:token', async (req, res) => {
   try {
     const { data: project, error: projErr } = await supabaseAdmin
@@ -317,7 +221,9 @@ router.get('/updates/:token', async (req, res) => {
   }
 });
 
-// POST/GET /api/public/domain-lookup
+// ==========================================
+// 5. DOMAIN LOOKUP
+// ==========================================
 router.get('/public/domain-lookup', async (req, res) => {
   const { domain } = req.query;
   if (!domain) return res.status(400).json({ error: 'Domain required' });
@@ -327,7 +233,7 @@ router.get('/public/domain-lookup', async (req, res) => {
       .from('organizations')
       .select('id, name, brand_settings')
       .eq('custom_domain', domain)
-      .eq('domain_status', 'active') // Only route if Vercel approved it
+      .eq('domain_status', 'active') 
       .single();
 
     if (error || !org) return res.status(404).json({ error: 'Domain not found or inactive' });
@@ -335,6 +241,93 @@ router.get('/public/domain-lookup', async (req, res) => {
     res.status(200).json(org);
   } catch (err) {
     res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
+// ==========================================
+// 6. MULTI-CURRENCY SMART CHECKOUT (FLUTTERWAVE)
+// ==========================================
+router.get('/invoices/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: invoice, error: invError } = await supabaseAdmin
+      .from('invoices')
+      .select('*, clients(*)')
+      .eq('id', id)
+      .single();
+
+    if (invError || !invoice) return res.status(404).json({ error: 'Invoice not found.' });
+
+    const { data: org, error: orgError } = await supabaseAdmin
+      .from('organizations')
+      .select('name, brand_settings, default_payout_currency, fw_subaccount_ngn, fw_subaccount_usd')
+      .eq('id', invoice.org_id)
+      .single();
+
+    if (orgError) throw orgError;
+
+    res.status(200).json({ invoice, org });
+  } catch (err) {
+    console.error('[Public Invoice Fetch Error]:', err.message);
+    res.status(500).json({ error: 'Failed to load checkout details.' });
+  }
+});
+
+router.post('/invoices/:id/flutterwave-checkout', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: invoice } = await supabaseAdmin.from('invoices').select('*, clients(*)').eq('id', id).single();
+    const { data: org } = await supabaseAdmin.from('organizations').select('*').eq('id', invoice.org_id).single();
+
+    if (!invoice || !org) return res.status(404).json({ error: 'Transaction data missing.' });
+
+    const currency = invoice.currency || 'NGN';
+    let subaccountId = (currency === 'NGN') ? org.fw_subaccount_ngn : org.fw_subaccount_usd;
+
+    if (!subaccountId) {
+      subaccountId = (org.default_payout_currency === 'NGN') ? org.fw_subaccount_ngn : org.fw_subaccount_usd;
+    }
+
+    if (!subaccountId) {
+      return res.status(400).json({ error: 'This freelancer has not connected a payout vault for this currency.' });
+    }
+
+    const flwPayload = {
+      tx_ref: `regulus-inv-${invoice.id}-${Date.now()}`,
+      amount: invoice.total,
+      currency: currency,
+      redirect_url: `${process.env.FRONTEND_URL}/pay/success?invoice_id=${invoice.id}`,
+      customer: {
+        email: invoice.clients?.email,
+        name: invoice.clients?.name,
+      },
+      customizations: {
+        title: org.name || "Regulus Freelancer",
+        description: `Payment for Invoice #${invoice.invoice_number}`,
+        logo: "https://your-logo-url.com/logo.png",
+      },
+      subaccounts: [
+        {
+          id: subaccountId,
+          transaction_charge_type: "percentage",
+          transaction_charge: 1 
+        }
+      ]
+    };
+
+    const response = await axios.post(
+      'https://api.flutterwave.com/v3/payments',
+      flwPayload,
+      { headers: { Authorization: `Bearer ${process.env.FLW_SECRET_KEY}` } }
+    );
+
+    res.json({ url: response.data.data.link });
+
+  } catch (err) {
+    console.error('[FLW Checkout Error]:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Failed to initialize payment gateway.' });
   }
 });
 
