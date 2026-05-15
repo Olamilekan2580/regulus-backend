@@ -2,14 +2,14 @@ const express = require('express');
 const router = express.Router();
 const supabaseAdmin = require('../config/supabase');
 
-// 1. SIGNUP ROUTE (Now with Workspace Binding)
+// ==========================================
+// 1. SIGNUP ROUTE (Email & Invitations)
+// ==========================================
 router.post('/signup', async (req, res) => {
   try {
-    // We added inviteToken to the expected payload
     const { email, password, fullName, inviteToken } = req.body; 
     let invitation = null;
 
-    // STEP A: If an invite token was provided, validate it BEFORE creating the user
     if (inviteToken) {
       const { data: inviteData, error: inviteErr } = await supabaseAdmin
         .from('org_invitations')
@@ -21,7 +21,6 @@ router.post('/signup', async (req, res) => {
         return res.status(400).json({ error: 'Invalid or expired invitation token.' });
       }
 
-      // Security check: Ensure the email matches the invitation
       if (inviteData.email.toLowerCase() !== email.toLowerCase()) {
         return res.status(400).json({ error: 'This email does not match the invitation.' });
       }
@@ -29,7 +28,6 @@ router.post('/signup', async (req, res) => {
       invitation = inviteData;
     }
 
-    // STEP B: Create the user in Supabase Auth
     const { data, error } = await supabaseAdmin.auth.signUp({
       email,
       password,
@@ -41,9 +39,7 @@ router.post('/signup', async (req, res) => {
     if (error) throw error;
     const userId = data.user.id;
 
-    // STEP C: The Magic Link - Bind the user to the workspace
     if (invitation) {
-      // 1. Create their membership in the agency
       const { error: membershipErr } = await supabaseAdmin
         .from('org_memberships')
         .insert([{
@@ -54,7 +50,6 @@ router.post('/signup', async (req, res) => {
 
       if (membershipErr) throw membershipErr;
 
-      // 2. Burn the invitation token so it cannot be used again
       await supabaseAdmin
         .from('org_invitations')
         .delete()
@@ -68,7 +63,9 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-// 2. LOGIN ROUTE (Remains unchanged)
+// ==========================================
+// 2. LOGIN ROUTE (Email & Password)
+// ==========================================
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -87,6 +84,74 @@ router.post('/login', async (req, res) => {
   } catch (err) {
     console.error('[Login Error]:', err.message);
     res.status(401).json({ error: err.message || 'Invalid email or password' });
+  }
+});
+
+// ==========================================
+// 3. OAUTH AUTO-PROVISIONING (Google & GitHub)
+// ==========================================
+router.post('/init-workspace', async (req, res) => {
+  const { email, name, auth_id } = req.body;
+
+  if (!email || !auth_id) {
+    return res.status(400).json({ error: 'Missing required auth payload.' });
+  }
+
+  try {
+    // A. Check if they already have an org_id in their profile
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('org_id')
+      .eq('id', auth_id)
+      .single();
+
+    if (profile && profile.org_id) {
+      return res.status(200).json({ org_id: profile.org_id });
+    }
+
+    // B. Create the new Workspace / Organization
+    const { data: newOrg, error: orgError } = await supabaseAdmin
+      .from('organizations')
+      .insert([{ name: `${name || email.split('@')[0]}'s Workspace` }])
+      .select()
+      .single();
+
+    if (orgError) throw orgError;
+
+    // C. Link the Profile to the new org_id 
+    // (Assuming a Supabase trigger already created the profile row during OAuth)
+    const { error: profileUpdateError } = await supabaseAdmin
+      .from('profiles')
+      .update({ org_id: newOrg.id })
+      .eq('id', auth_id);
+
+    if (profileUpdateError) {
+      // Fallback: If no trigger exists, insert the profile manually
+      await supabaseAdmin.from('profiles').insert([{ 
+        id: auth_id, 
+        email: email, 
+        full_name: name, 
+        org_id: newOrg.id 
+      }]);
+    }
+
+    // D. Create the membership record (Matching your signup route schema)
+    const { error: membershipError } = await supabaseAdmin
+      .from('org_memberships')
+      .insert([{ 
+        org_id: newOrg.id, 
+        user_id: auth_id, 
+        role: 'owner' 
+      }]);
+
+    if (membershipError) throw membershipError;
+
+    console.log(`[Provisioning]: Built workspace for OAuth user ${email}`);
+    res.status(200).json({ org_id: newOrg.id });
+
+  } catch (err) {
+    console.error('[Workspace Init Error]:', err.message);
+    res.status(500).json({ error: 'Failed to provision workspace database.' });
   }
 });
 
