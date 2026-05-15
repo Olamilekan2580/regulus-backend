@@ -118,22 +118,18 @@ router.post('/init-workspace', async (req, res) => {
 
     if (orgError) throw orgError;
 
-    // C. Link the Profile to the new org_id 
-    // (Assuming a Supabase trigger already created the profile row during OAuth)
-    const { error: profileUpdateError } = await supabaseAdmin
+    // C. Upsert the Profile to the new org_id 
+    // (Creates the row if missing, updates it if it exists)
+    const { error: profileError } = await supabaseAdmin
       .from('profiles')
-      .update({ org_id: newOrg.id })
-      .eq('id', auth_id);
-
-    if (profileUpdateError) {
-      // Fallback: If no trigger exists, insert the profile manually
-      await supabaseAdmin.from('profiles').insert([{ 
+      .upsert({ 
         id: auth_id, 
         email: email, 
-        full_name: name, 
+        full_name: name || email.split('@')[0], 
         org_id: newOrg.id 
-      }]);
-    }
+      });
+
+    if (profileError) throw profileError;
 
     // D. Create the membership record (Matching your signup route schema)
     const { error: membershipError } = await supabaseAdmin
