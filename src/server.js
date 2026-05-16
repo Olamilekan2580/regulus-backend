@@ -115,10 +115,19 @@ app.use('/api/infrastructure', requireAuth, billingGuard, infrastructureRoutes);
 // ==========================================
 // 5. GLOBAL 404 HANDLER
 // ==========================================
-app.use((req, res) => {
+app.use((req, res, next) => {
   console.log(`[404] Resource not found: ${req.url}`);
-  res.status(404).json({ error: 'Route not found' });
+  // Pass to the error handler instead of terminating immediately
+  const error = new Error('Route not found');
+  error.status = 404;
+  next(error);
 });
+
+// ==========================================
+// 6. GLOBAL ERROR TELEMETRY
+// ==========================================
+const { errorHandler } = require('./middleware/errorHandler');
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
