@@ -8,6 +8,19 @@ if (!supabaseUrl || !supabaseKey) {
   process.exit(1);
 }
 
+// --- DIAGNOSTIC TRAP START ---
+try {
+  // A Supabase key is just a JWT. This cracks it open to see what identity it actually holds.
+  const payload = JSON.parse(Buffer.from(supabaseKey.split('.')[1], 'base64').toString());
+  console.log(`\n=========================================`);
+  console.log(`[SYSTEM BOOT] SUPABASE KEY IDENTITY DETECTED:`);
+  console.log(`[SYSTEM BOOT] Role: ${payload.role}`);
+  console.log(`=========================================\n`);
+} catch(e) {
+  console.log(`[SYSTEM BOOT] FATAL: The key provided in SUPABASE_SERVICE_ROLE_KEY is not a valid JWT.`);
+}
+// --- DIAGNOSTIC TRAP END ---
+
 // We use the Service Role key to securely bypass RLS from the backend
 const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
   auth: {
