@@ -261,22 +261,35 @@ router.get('/:id/submissions', requireAuth, async (req, res) => {
   try {
     const projectId = req.params.id;
 
-    // Fetch the client's form data and files
-    const { data, error } = await supabaseAdmin
-      .from('project_submissions') // Note: Ensure this matches your actual intake table name
-      .select('*')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false });
+    // 1. Fetch the data from where the client actually saved it
+    const { data: project, error } = await supabaseAdmin
+      .from('projects')
+      .select('requirements, project_assets, intake_submitted_at')
+      .eq('id', projectId)
+      .single();
 
     if (error) throw error;
     
-    // Return empty array instead of null if no submissions exist yet
-    res.status(200).json(data || []); 
-    
-  // Change this part of the route:
+    // 2. If the client hasn't submitted anything yet, return the empty feed
+    if (!project.requirements && (!project.project_assets || project.project_assets.length === 0)) {
+      return res.status(200).json([]);
+    }
+
+    // 3. THE ADAPTER: Translate the 'projects' columns into the exact JSON shape the React feed expects
+    const formattedSubmission = [{
+      id: `intake-${projectId}`, // Generates a safe key for React mapping
+      created_at: project.intake_submitted_at || new Date().toISOString(),
+      form_data: {
+        "Project Requirements": project.requirements || "No text provided."
+      },
+      files: project.project_assets || []
+    }];
+
+    // 4. Send it to the frontend
+    res.status(200).json(formattedSubmission); 
+
   } catch (err) {
     console.error('[Fetch Submissions Error]:', err.message);
-    // WE ARE CHANGING THIS LINE TO SEND THE RAW ERROR:
     res.status(500).json({ error: `DB Crash: ${err.message}` });
   }
 });
