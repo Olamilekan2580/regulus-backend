@@ -75,6 +75,13 @@ app.use((req, res, next) => {
 });
 
 // ==========================================
+// INFRASTRUCTURE KEEP-ALIVE (DO NOT DELETE)
+// ==========================================
+app.get('/api/ping', (req, res) => {
+  res.status(200).send('awake');
+});
+
+// ==========================================
 // 3. UNGATED ROUTES (Public, Auth, Core Settings)
 // ==========================================
 app.use('/api/auth', authRoutes);
@@ -111,10 +118,6 @@ app.use('/api/infrastructure', requireAuth, billingGuard, infrastructureRoutes);
 app.use((req, res) => {
   console.log(`[404] Resource not found: ${req.url}`);
   res.status(404).json({ error: 'Route not found' });
-});
-
-app.get('/api/ping', (req, res) => {
-  res.status(200).send('awake');
 });
 
 const PORT = process.env.PORT || 4000;
