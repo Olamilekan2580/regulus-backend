@@ -331,4 +331,31 @@ router.post('/invoices/:id/flutterwave-checkout', async (req, res) => {
   }
 });
 
+/**
+ * GET /public/proposals/:id
+ * Read-only bypass for clients viewing shared proposal links.
+ */
+router.get('/proposals/:id', async (req, res) => {
+  try {
+    // We use Supabase Admin to bypass Row Level Security since the client is unauthenticated
+    const { data: proposal, error } = await supabaseAdmin
+      .from('proposals')
+      .select(`
+        *,
+        clients ( name, company, email )
+      `)
+      .eq('id', req.params.id)
+      .single();
+
+    if (error || !proposal) {
+      return res.status(404).json({ error: 'Proposal not found or access revoked.' });
+    }
+
+    res.status(200).json(proposal);
+  } catch (err) {
+    console.error('[Public Proposal Error]:', err.message);
+    res.status(500).json({ error: 'Failed to retrieve secure document.' });
+  }
+});
+
 module.exports = router;

@@ -8,21 +8,21 @@ router.use(requireAuth);
 
 // GET: Fetch all clients for the specific Organization
 router.get('/', async (req, res, next) => {
-  const orgId = req.headers['x-org-id'];
+  // DEFENSIVE FIX: Check headers first, fallback to query parameters
+  const orgId = req.headers['x-org-id'] || req.query.org_id;
 
-  if (!orgId) return res.status(400).json({ error: 'Organization context missing.' });
+  if (!orgId) return res.status(400).json({ error: 'Organization context missing. Refresh your dashboard.' });
 
   try {
     const { data, error } = await supabaseAdmin
       .from('clients')
       .select('*')
-      .eq('org_id', orgId) // Filter by Organization, not User ID
+      .eq('org_id', orgId) 
       .order('created_at', { ascending: false });
 
     if (error) throw error;
     res.status(200).json(data);
   } catch (err) {
-    // Unexpected system error -> Pass to Telegram Telemetry
     next(err);
   }
 });
@@ -30,18 +30,20 @@ router.get('/', async (req, res, next) => {
 // POST: Create a new client within the Organization
 router.post('/', async (req, res, next) => {
   try {
-    const { name, email, phone, company } = req.body;
-    const orgId = req.headers['x-org-id'];
+    const { name, email, phone, company, org_id } = req.body;
+    
+    // DEFENSIVE FIX: Check body first (standard for POST forms), fallback to headers
+    const targetOrgId = org_id || req.headers['x-org-id'];
 
-    if (!orgId) return res.status(400).json({ error: 'Organization context missing.' });
+    if (!targetOrgId) return res.status(400).json({ error: 'Organization context missing. Cannot attach client to a void workspace.' });
     if (!name || !email) {
-      return res.status(400).json({ error: 'Name and email are required' });
+      return res.status(400).json({ error: 'Name and email are strictly required.' });
     }
 
     const { data, error } = await supabaseAdmin
       .from('clients')
       .insert([{ 
-        org_id: orgId, // Tied to the workspace
+        org_id: targetOrgId, 
         name, 
         email, 
         phone, 
@@ -55,10 +57,9 @@ router.post('/', async (req, res, next) => {
   } catch (err) {
     // Expected user error (Conflict)
     if (err.code === '23505') {
-      return res.status(409).json({ error: 'A client with this email already exists in this workspace' });
+      return res.status(409).json({ error: 'A client with this email already exists in this workspace.' });
     }
     
-    // Unexpected system error -> Pass to Telegram Telemetry
     next(err); 
   }
 });
