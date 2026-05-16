@@ -113,6 +113,10 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+app.get('/api/ping', (req, res) => {
+  res.status(200).send('awake');
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`[SYSTEM] Regulus API Gateway operational on port ${PORT}`);
