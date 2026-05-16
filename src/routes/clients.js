@@ -7,7 +7,7 @@ const supabaseAdmin = require('../config/supabase');
 router.use(requireAuth);
 
 // GET: Fetch all clients for the specific Organization
-router.get('/', async (req, res) => {
+router.get('/', async (req, res, next) => {
   const orgId = req.headers['x-org-id'];
 
   if (!orgId) return res.status(400).json({ error: 'Organization context missing.' });
@@ -22,13 +22,13 @@ router.get('/', async (req, res) => {
     if (error) throw error;
     res.status(200).json(data);
   } catch (err) {
-    console.error('[Clients GET Error]:', err.message);
-    res.status(500).json({ error: 'Failed to fetch clients' });
+    // Unexpected system error -> Pass to Telegram Telemetry
+    next(err);
   }
 });
 
 // POST: Create a new client within the Organization
-router.post('/', async (req, res) => {
+router.post('/', async (req, res, next) => {
   try {
     const { name, email, phone, company } = req.body;
     const orgId = req.headers['x-org-id'];
@@ -53,11 +53,13 @@ router.post('/', async (req, res) => {
     if (error) throw error;
     res.status(201).json(data);
   } catch (err) {
-    console.error('[Clients POST Error]:', err.message);
+    // Expected user error (Conflict)
     if (err.code === '23505') {
       return res.status(409).json({ error: 'A client with this email already exists in this workspace' });
     }
-    res.status(500).json({ error: 'Failed to create client' });
+    
+    // Unexpected system error -> Pass to Telegram Telemetry
+    next(err); 
   }
 });
 
