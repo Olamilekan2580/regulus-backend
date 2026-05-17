@@ -57,7 +57,6 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   const orgId = req.headers['x-org-id'];
   
-  // 🔒 THE FIX: Added project_id to the destructuring
   const { client_id, project_id, invoice_number, total, status, due_date, currency, line_items } = req.body;
 
   if (!client_id || !invoice_number || total === undefined) {
@@ -87,22 +86,25 @@ router.post('/', async (req, res) => {
     const baseTotal = parseFloat(total) * rate;
 
     // 3. DATABASE EXECUTION
+    // Hardened structural payload declaration to match core Postgres schemas
+    const invoicePayload = { 
+      org_id: orgId, 
+      creator_id: req.user?.id || null, 
+      client_id, 
+      project_id: project_id || null, 
+      invoice_number: invoice_number.toString().trim(), 
+      total: parseFloat(total) || 0, 
+      currency: baseCurrency,
+      base_currency_total: parseFloat(baseTotal.toFixed(2)),
+      exchange_rate_at_creation: rate,
+      status: status || 'Draft', 
+      due_date: due_date || null,
+      line_items: Array.isArray(line_items) ? line_items : []
+    };
+
     const { data, error } = await supabaseAdmin
       .from('invoices')
-      .insert([{ 
-        org_id: orgId, 
-        creator_id: req.user.id, // Audit trail
-        client_id, 
-        project_id: project_id || null, // 🔒 THE FIX: Pass the project_id to Supabase
-        invoice_number, 
-        total: parseFloat(total) || 0, 
-        currency: baseCurrency,
-        base_currency_total: parseFloat(baseTotal.toFixed(2)),
-        exchange_rate_at_creation: rate,
-        status: status || 'Draft', 
-        due_date: due_date || null,
-        line_items: Array.isArray(line_items) ? line_items : []
-      }])
+      .insert([invoicePayload])
       .select('*, clients(*)')
       .single();
 
@@ -110,7 +112,6 @@ router.post('/', async (req, res) => {
     res.status(201).json(data);
   } catch (err) {
     console.error('[Invoices POST Error]:', err.message);
-    // TEMPORARY DEBUG FIX: Send the exact SQL error to the frontend UI
     res.status(500).json({ error: `DB Error: ${err.message}` }); 
   }
 });

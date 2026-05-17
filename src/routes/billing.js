@@ -36,29 +36,47 @@ router.post('/subscribe', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid plan tier selected.' });
     }
 
-    // B. Security: Look up the user's Organization ID from the DB (Zero-Trust Frontend)
-    const { data: membership, error: memErr } = await supabaseAdmin
-      .from('org_memberships')
+    let orgId = null;
+    let role = 'member';
+
+    // B. Security Check Layer 1: Check master profiles table first (Bypasses empty membership table bugs)
+    const { data: profile, error: profErr } = await supabaseAdmin
+      .from('profiles')
       .select('org_id, role')
-      .eq('user_id', req.user.id)
-      .single();
+      .eq('id', req.user.id)
+      .maybeSingle();
 
-    if (memErr || !membership) {
-      return res.status(403).json({ error: 'You are not a member of a workspace.' });
+    if (profile?.org_id) {
+      orgId = profile.org_id;
+      role = profile.role || 'owner'; // Default to owner if profile row has no explicitly mapped role
+    } else {
+      // Layer 2 Fallback: Check fallback org_memberships table
+      const { data: membership, error: memErr } = await supabaseAdmin
+        .from('org_memberships')
+        .select('org_id, role')
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+
+      if (membership?.org_id) {
+        orgId = membership.org_id;
+        role = membership.role;
+      }
     }
 
-    // RBAC: Only Owners and Admins can trigger billing mutations
-    if (!['owner', 'admin'].includes(membership.role)) {
-      return res.status(403).json({ error: 'Insufficient permissions to modify workspace billing.' });
+    // C. Validation Check: Stop execution if they literally don't belong anywhere
+    if (!orgId) {
+      return res.status(403).json({ error: 'You are not associated with a workspace profile.' });
     }
 
-    const orgId = membership.org_id;
+    // RBAC Enforcement: Only Owners and Admins can mutate financial states
+    if (!['owner', 'admin'].includes(role.toLowerCase())) {
+      return res.status(403).json({ error: 'Insufficient permissions to modify workspace billing configurations.' });
+    }
 
-    // C. Construct the Deterministic Transaction Reference
-    // Format: regulus-sub-[ORG_ID]-[PLAN]-[TIMESTAMP]
+    // D. Construct the Deterministic Transaction Reference
     const txRef = `regulus-sub-${orgId}-${plan_tier}-${Date.now()}`;
 
-    // D. Prepare Flutterwave Payload
+    // E. Prepare Flutterwave Payload
     const flwPayload = {
       tx_ref: txRef,
       amount: selectedCurrency === 'NGN' ? PLAN_PRICES[plan_tier].ngn : PLAN_PRICES[plan_tier].usd,
@@ -81,7 +99,7 @@ router.post('/subscribe', requireAuth, async (req, res) => {
       }
     };
 
-    // E. Execute Flutterwave Handshake
+    // F. Execute Flutterwave Handshake
     const response = await axios.post(
       'https://api.flutterwave.com/v3/payments',
       flwPayload,
@@ -97,7 +115,7 @@ router.post('/subscribe', requireAuth, async (req, res) => {
       throw new Error('Flutterwave failed to generate payment link.');
     }
 
-    // F. Return Secure Link to Frontend
+    // G. Return Secure Link to Frontend
     res.status(200).json({ 
       success: true, 
       url: response.data.data.link,
