@@ -42,9 +42,17 @@ router.post('/subscribe', requireAuth, async (req, res) => {
     // B. Security Check Layer 1: Check master profiles table first (Bypasses empty membership table bugs)
     const { data: profile, error: profErr } = await supabaseAdmin
       .from('profiles')
-      .select('org_id, role')
+      .select('*') // ARCHITECT FIX: Grab everything to inspect the full object topology in logs
       .eq('id', req.user.id)
       .maybeSingle();
+
+    // --- DIAGNOSTIC TRAP START ---
+    console.log(`\n=========================================`);
+    console.log(`[BILLING DIAGNOSTIC] Current Logged-in User ID: ${req.user?.id}`);
+    console.log(`[BILLING DIAGNOSTIC] Database Profile Found:`, profile);
+    console.log(`[BILLING DIAGNOSTIC] Query Error (if any):`, profErr);
+    console.log(`=========================================\n`);
+    // --- DIAGNOSTIC TRAP END ---
 
     if (profile?.org_id) {
       orgId = profile.org_id;
